@@ -32,27 +32,49 @@ format conversion instead of trim/crop.
 
 ## UI flow
 
-1. Single window, primarily a drag-and-drop zone (plus an "Open Files…"
-   button as a non-drag fallback).
-2. Dropped files are listed (filename + detected category icon:
-   image/video/audio).
-3. **Category enforcement**: all dropped files in one batch must be the
+Visual model: ImageOptim (macOS) — a plain drop-zone window that switches
+to a flat file-list view once files land, with a slim bottom bar. Adapted
+here with an added toolbar above the list for the format picker, since
+(unlike ImageOptim, which always does the same operation) this app needs
+you to choose a target format.
+
+1. **Initial screen**: single window, no toolbar. Centered dashed
+   drop-zone box with a down-arrow icon (like ImageOptim's empty state).
+   Bottom bar: `+` button on the left (opens a file picker as the non-drag
+   fallback), a hint label ("Drag and drop image, video, or audio files
+   onto the area above"), nothing on the right (no action button until
+   files exist).
+2. **After files are dropped**, the drop-zone area becomes a flat file
+   list, one row per file: left icon (image/video/audio type icon, later
+   replaced by a checkmark once that file converts), filename, and a
+   right-aligned status text that updates in place (`Ready` →
+   `Converting…` → `Done` / `Failed: <reason>`). No size/savings column —
+   this app converts, it doesn't report size reduction like ImageOptim
+   does.
+3. **Toolbar above the list** (appears only once files are present): left
+   side shows an info label (e.g. "5 files added"); right side shows
+   "Convert to:" plus a format dropdown populated per the batch's
+   category (see format-selection rules below).
+4. **Category enforcement**: all dropped files in one batch must be the
    same category — image, video, or audio. Mixing categories (e.g. an
    image + a video in the same drop) is rejected with an inline message
-   ("Can't mix images, video, and audio in one batch") rather than
-   attempting conversion. Dropping a new mixed batch replaces the list;
-   the app does not attempt to auto-split it.
-4. One target-format dropdown applies to the whole batch, populated based
-   on the batch's category:
+   ("Can't mix images, video, and audio in one batch") shown in place of
+   the file list, rather than attempting conversion. Dropping a new mixed
+   batch replaces whatever was there; the app does not attempt to
+   auto-split it.
+5. **Format-selection rules** (populates the toolbar dropdown):
    - **Images dropped** → image output formats only
    - **Audio dropped** → audio output formats only
    - **Video dropped** → video output formats **+ gif + webp** (animated
      output via ffmpeg, not cwebp/gif2webp since the source is video, not
      a static image or animated GIF file) **+ all audio formats**
      (extraction — drops the video stream, keeps/transcodes audio only)
-5. "Convert" button runs the batch with a per-file progress/status
-   indicator (queued → converting → done/failed).
-6. Failures are shown inline per file (which file, brief reason) — not a
+6. **Bottom bar** (list view) keeps the same shape as ImageOptim's: `+`
+   button on the left (add more files to the current batch — subject to
+   the same category enforcement), a summary status label in the middle
+   ("Converted 4/5 files"), and a **Convert** button on the right, where
+   ImageOptim has "Again".
+7. Failures are shown inline per file (in that row's status text) — not a
    single blocking modal for the whole batch. Successful files still
    complete even if others in the batch fail.
 
