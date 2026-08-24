@@ -26,7 +26,7 @@ from mediaconvert.converter import convert_file
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, initial_paths: list[Path] | None = None):
         super().__init__()
         self.setWindowTitle("mediaconvert")
         self.resize(560, 420)
@@ -34,6 +34,7 @@ class MainWindow(QMainWindow):
 
         self._paths: list[Path] = []
         self._category: str | None = None
+        self._converting = False
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -50,6 +51,9 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self._show_empty_state("Drag and drop image, video, or audio files onto the area above")
+
+        if initial_paths:
+            self._load_paths(initial_paths)
 
     # -- page builders ----------------------------------------------------
 
@@ -122,7 +126,7 @@ class MainWindow(QMainWindow):
         self.bottom_status_label.setText(hint)
         self.convert_button.setEnabled(False)
 
-    def _show_list_state(self, category: str) -> None:
+    def _show_list_state(self) -> None:
         self.stack.setCurrentIndex(1)
         self.reject_label.setText("")
         self.file_list.show()
@@ -146,13 +150,18 @@ class MainWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
+        event.acceptProposedAction()
         paths = [Path(url.toLocalFile()) for url in event.mimeData().urls() if url.isLocalFile()]
         self._load_paths(paths)
 
     def _open_files_dialog(self) -> None:
+        if self._converting:
+            return
         files, _ = QFileDialog.getOpenFileNames(self, "Open files")
         if files:
-            self._load_paths([Path(f) for f in files])
+            new_paths = [Path(f) for f in files]
+            combined = self._paths + new_paths if self._paths else new_paths
+            self._load_paths(combined)
 
     # -- icons ----------------------------------------------------------------
 
@@ -168,7 +177,7 @@ class MainWindow(QMainWindow):
     # -- batch loading and conversion ---------------------------------------
 
     def _load_paths(self, paths: list[Path]) -> None:
-        if not paths:
+        if not paths or self._converting:
             return
         try:
             category = categorize(paths)
@@ -192,25 +201,36 @@ class MainWindow(QMainWindow):
         self.format_combo.clear()
         self.format_combo.addItems(target_formats(category))
 
-        self._show_list_state(category)
+        self._show_list_state()
 
     def _convert_batch(self) -> None:
         fmt = self.format_combo.currentText()
         if not fmt or not self._paths:
             return
+        self._converting = True
         self.convert_button.setEnabled(False)
+        self.add_button.setEnabled(False)
 
-        success_count = 0
-        for i, path in enumerate(self._paths):
-            item = self.file_list.item(i)
-            item.setText(f"{path.name}  —  Converting…")
-            QApplication.processEvents()
-            result = convert_file(path, fmt, self._category)
-            if result.success:
-                success_count += 1
-                item.setText(f"{path.name}  —  Done")
-            else:
-                item.setText(f"{path.name}  —  Failed: {result.error}")
+        try:
+            success_count = 0
+            for i, path in enumerate(self._paths):
+                item = self.file_list.item(i)
+                item.setText(f"{path.name}  —  Converting…")
+                QApplication.processEvents()
+                result = convert_file(path, fmt, self._category)
+                if result.success:
+                    success_count += 1
+                    item.setText(f"{path.name}  —  Done")
+                else:
+                    error_summary = (result.error or "").strip().splitlines()
+                    short_error = error_summary[-1] if error_summary else "unknown error"
+                    if len(short_error) > 120:
+                        short_error = short_error[:117] + "..."
+                    item.setText(f"{path.name}  —  Failed: {short_error}")
+                    item.setToolTip(result.error or "")
 
-        self.bottom_status_label.setText(f"Converted {success_count}/{len(self._paths)} file(s)")
-        self.convert_button.setEnabled(True)
+            self.bottom_status_label.setText(f"Converted {success_count}/{len(self._paths)} file(s)")
+        finally:
+            self._converting = False
+            self.convert_button.setEnabled(True)
+            self.add_button.setEnabled(True)

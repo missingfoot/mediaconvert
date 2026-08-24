@@ -4,6 +4,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+# Formats cwebp can read directly. Everything else needs a temp-PNG bridge
+# through `magick` first (cwebp doesn't understand bmp/avif/heic/etc).
+_CWEBP_READABLE = {".png", ".jpg", ".jpeg", ".jfif", ".tif", ".tiff", ".webp"}
+
 
 def _largest_ico_frame_index(src: Path) -> int:
     """Index of the largest frame (by pixel area) in a multi-frame .ico."""
@@ -11,6 +15,10 @@ def _largest_ico_frame_index(src: Path) -> int:
         ["magick", "identify", "-format", "%wx%h\n", str(src)],
         capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        # Fall back to frame 0 - an intentional, documented choice rather
+        # than an accident of an empty stdout loop.
+        return 0
     best_idx = 0
     best_area = -1
     for idx, line in enumerate(result.stdout.strip().splitlines()):
@@ -44,14 +52,13 @@ def _convert_to_webp(src: Path, magick_src: str, out_path: Path) -> None:
         )
         if result.returncode == 0:
             return
-        # Fall through to cwebp if gif2webp fails (e.g. non-animated .gif).
+        # Fall through to cwebp as a defensive fallback if gif2webp fails.
 
-    if magick_src == str(src):
-        cwebp_src = str(src)
-        _run(["cwebp", "-q", "90", cwebp_src, "-o", str(out_path)])
+    if src.suffix.lower() in _CWEBP_READABLE:
+        _run(["cwebp", "-q", "90", magick_src, "-o", str(out_path)])
     else:
-        # magick_src references a frame index (e.g. an .ico) - cwebp needs a
-        # real file, so extract that frame to a temp PNG first.
+        # cwebp can't read this format directly (e.g. bmp/avif/heic/ico) -
+        # bridge through a temp PNG via magick first.
         with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
             _run(["magick", magick_src, tmp.name])
             _run(["cwebp", "-q", "90", tmp.name, "-o", str(out_path)])

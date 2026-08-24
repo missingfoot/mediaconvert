@@ -2,7 +2,8 @@
 Type=Application
 Name=mediaconvert
 Comment=Drag-and-drop image/video/audio format conversion
-Exec=/usr/bin/mediaconvert %f
+Exec=/usr/bin/mediaconvert %F
 Icon=image-x-generic
 Terminal=false
 Categories=AudioVideo;Graphics;
+MimeType=image/png;image/jpeg;image/webp;image/gif;image/bmp;image/tiff;video/mp4;video/x-matroska;video/webm;audio/mpeg;audio/wav;audio/flac;

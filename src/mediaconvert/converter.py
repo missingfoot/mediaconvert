@@ -28,4 +28,5 @@ def convert_file(src: Path, fmt: str, category: str) -> ConversionResult:
         copy_mtime(src, out_path)
         return ConversionResult(src=src, out_path=out_path, success=True, error=None)
     except RuntimeError as e:
+        out_path.unlink(missing_ok=True)
         return ConversionResult(src=src, out_path=None, success=False, error=str(e))

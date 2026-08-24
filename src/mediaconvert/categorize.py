@@ -17,9 +17,6 @@ AUDIO_FORMATS = {
     "wav",
 }
 
-_ALL_FORMATS = IMAGE_FORMATS | VIDEO_FORMATS | AUDIO_FORMATS
-
-
 class MixedCategoryError(Exception):
     """Raised when a batch mixes categories or contains an unknown extension."""
 

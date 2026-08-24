@@ -103,6 +103,50 @@ def test_convert_ico_to_webp_picks_largest_frame(tmp_path):
     assert identify.stdout.strip() == "32x32,WEBP"
 
 
+def test_convert_bmp_to_webp(tmp_path):
+    png_src = tmp_path / "a.png"
+    src = tmp_path / "a.bmp"
+    out = tmp_path / "a.webp"
+    _make_png(png_src)
+    subprocess.run(
+        ["magick", str(png_src), str(src)],
+        check=True, capture_output=True,
+    )
+    convert_image(src, out, "webp")
+    assert out.exists()
+    identify = subprocess.run(
+        ["magick", "identify", "-format", "%m", str(out)],
+        check=True, capture_output=True, text=True,
+    )
+    assert identify.stdout.strip() == "WEBP"
+
+
+def _magick_supports_avif() -> bool:
+    result = subprocess.run(
+        ["magick", "-list", "format"], capture_output=True, text=True,
+    )
+    return "AVIF" in result.stdout
+
+
+@pytest.mark.skipif(not _magick_supports_avif(), reason="magick build lacks AVIF support")
+def test_convert_avif_to_webp(tmp_path):
+    png_src = tmp_path / "a.png"
+    src = tmp_path / "a.avif"
+    out = tmp_path / "a.webp"
+    _make_png(png_src)
+    subprocess.run(
+        ["magick", str(png_src), str(src)],
+        check=True, capture_output=True,
+    )
+    convert_image(src, out, "webp")
+    assert out.exists()
+    identify = subprocess.run(
+        ["magick", "identify", "-format", "%m", str(out)],
+        check=True, capture_output=True, text=True,
+    )
+    assert identify.stdout.strip() == "WEBP"
+
+
 def test_convert_failure_raises_runtime_error(tmp_path):
     src = tmp_path / "not_an_image.png"
     src.write_text("this is not an image")

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from mediaconvert.categorize import AUDIO_FORMATS
 
+_ANIMATED_OUTPUT_FILTER = "fps=15,scale=480:-1:flags=lanczos"
+
 
 def convert_media(src: Path, out_path: Path, fmt: str) -> None:
     """Convert a video or audio file to fmt, writing to out_path.
@@ -18,9 +20,9 @@ def convert_media(src: Path, out_path: Path, fmt: str) -> None:
         # Extraction (source may be video or audio) - drop any video stream.
         cmd += ["-vn"]
     elif fmt == "gif":
-        cmd += ["-vf", "fps=15,scale=480:-1:flags=lanczos"]
+        cmd += ["-vf", _ANIMATED_OUTPUT_FILTER]
     elif fmt == "webp":
-        cmd += ["-vf", "fps=15,scale=480:-1:flags=lanczos", "-loop", "0"]
+        cmd += ["-vf", _ANIMATED_OUTPUT_FILTER, "-loop", "0"]
 
     cmd += [str(out_path)]
 
