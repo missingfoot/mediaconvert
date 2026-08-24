@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=mediaconvert
+Comment=Drag-and-drop image/video/audio format conversion
+Exec=/usr/bin/mediaconvert %f
+Icon=image-x-generic
+Terminal=false
+Categories=AudioVideo;Graphics;

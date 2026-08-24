@@ -5,3 +5,5 @@ src/*.pkg.tar.zst
 *.pkg.tar.zst
 .pytest_cache/
 .venv/
+src/pkg/
+src/*.log
