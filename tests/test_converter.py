@@ -85,3 +85,49 @@ def test_convert_file_collision_gets_suffix(tmp_path):
     result = convert_file(src, "bmp", "image")
     assert result.success is True
     assert result.out_path == tmp_path / "a-1.bmp"
+
+
+def test_convert_file_passes_control_to_convert_media(tmp_path, monkeypatch):
+    from mediaconvert import converter
+
+    received = {}
+
+    def fake_convert_media(src, out_path, fmt, control=None):
+        received["control"] = control
+
+    monkeypatch.setattr(converter, "convert_media", fake_convert_media)
+    src = tmp_path / "a.mp4"
+    src.write_bytes(b"stub")
+    sentinel = object()
+    convert_file(src, "mp4", "video", control=sentinel)
+    assert received["control"] is sentinel
+
+
+def test_convert_file_reports_stopped_job_as_failure_with_cleanup(tmp_path):
+    import threading
+    import time
+
+    from mediaconvert.control import ConversionControl
+
+    src = tmp_path / "a.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "mandelbrot=size=854x480:rate=30",
+         "-t", "60", "-c:v", "libx264", "-preset", "veryfast", str(src)],
+        check=True, capture_output=True,
+    )
+    control = ConversionControl()
+    result_holder = {}
+
+    def run_conversion():
+        result_holder["result"] = convert_file(src, "webm", "video", control=control)
+
+    thread = threading.Thread(target=run_conversion)
+    thread.start()
+    time.sleep(0.5)
+    control.request_stop()
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    result = result_holder["result"]
+    assert result.success is False
+    assert not (tmp_path / "a.webm").exists()

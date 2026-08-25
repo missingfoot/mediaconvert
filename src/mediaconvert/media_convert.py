@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from mediaconvert.categorize import AUDIO_FORMATS
+from mediaconvert.control import ConversionControl
 
 _ANIMATED_OUTPUT_FILTER = "fps=15,scale=480:-1:flags=lanczos"
 
@@ -57,12 +58,40 @@ def _try_remux(src: Path, out_path: Path, fmt: str) -> bool:
     return False
 
 
-def convert_media(src: Path, out_path: Path, fmt: str) -> None:
+def _run_killable(cmd: list[str], control: ConversionControl | None) -> subprocess.CompletedProcess:
+    """Like subprocess.run, but registers the process on control so a Stop
+    request from another thread can terminate it immediately instead of
+    waiting for a full encode to finish."""
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if control is not None:
+        control.set_current_process(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise
+    finally:
+        if control is not None:
+            control.set_current_process(None)
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
+def convert_media(
+    src: Path, out_path: Path, fmt: str, control: ConversionControl | None = None,
+) -> None:
     """Convert a video or audio file to fmt, writing to out_path.
 
     Tries a lossless remux first for anything other than gif/webp (which
     always need the animated-output filter applied); falls back to a full
     re-encode only when the source's codec isn't compatible with fmt.
+
+    If control is given and its Stop is requested while the (killable)
+    re-encode subprocess is running, the process is terminated and this
+    raises RuntimeError like any other failure - the remux attempt itself
+    is near-instant and isn't tracked on control.
 
     Raises RuntimeError on failure.
     """
@@ -86,10 +115,7 @@ def convert_media(src: Path, out_path: Path, fmt: str) -> None:
     cmd += [str(out_path)]
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True,
-            stdin=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS,
-        )
+        result = _run_killable(cmd, control)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"ffmpeg timed out after {TIMEOUT_SECONDS}s converting {src.name}")
     if result.returncode != 0:

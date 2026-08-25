@@ -4,6 +4,7 @@ path, preserve mtime, and report success/failure without raising."""
 from dataclasses import dataclass
 from pathlib import Path
 
+from mediaconvert.control import ConversionControl
 from mediaconvert.image_convert import convert_image
 from mediaconvert.media_convert import convert_media
 from mediaconvert.naming import copy_mtime, resolve_output_path
@@ -17,15 +18,24 @@ class ConversionResult:
     error: str | None
 
 
-def convert_file(src: Path, fmt: str, category: str, out_dir: Path | None = None) -> ConversionResult:
+def convert_file(
+    src: Path,
+    fmt: str,
+    category: str,
+    out_dir: Path | None = None,
+    control: ConversionControl | None = None,
+) -> ConversionResult:
     """Convert src to fmt, writing into out_dir (or next to src if out_dir is
-    None). Never raises - failures are reported in the result."""
+    None). Never raises - failures are reported in the result.
+
+    control, if given, is only meaningful for video/audio (image conversions
+    finish too fast to be worth making killable) - see convert_media."""
     out_path = resolve_output_path(src, fmt, out_dir)
     try:
         if category == "image":
             convert_image(src, out_path, fmt)
         else:
-            convert_media(src, out_path, fmt)
+            convert_media(src, out_path, fmt, control=control)
         copy_mtime(src, out_path)
         return ConversionResult(src=src, out_path=out_path, success=True, error=None)
     except Exception as e:

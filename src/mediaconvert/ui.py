@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from mediaconvert.categorize import CATEGORY_ORDER, split_by_category, target_formats
+from mediaconvert.control import ConversionControl
 from mediaconvert.converter import convert_file
 from mediaconvert.icons import svg_pixmap
 from mediaconvert.settings_dialog import SettingsDialog, resolve_output_dir
@@ -117,19 +118,28 @@ class _ConversionWorker(QThread):
 
     job_starting = Signal(str, int, int, int, int)  # category, row, index_in_category, total_in_category, remaining_overall
     job_finished = Signal(str, int, bool, str)  # category, row, success, error
-    finished_all = Signal(int, int)  # success_count, total
+    job_reverted = Signal(str, int)  # category, row - stopped mid-flight, back to Ready
+    finished_all = Signal(int, int, bool)  # success_count, attempted, stopped
 
-    def __init__(self, jobs: list[_ConversionJob], category_totals: dict[str, int]):
+    def __init__(self, jobs: list[_ConversionJob], category_totals: dict[str, int], control: ConversionControl):
         super().__init__()
         self._jobs = jobs
         self._category_totals = category_totals
+        self._control = control
 
     def run(self) -> None:
         total = len(self._jobs)
         success_count = 0
+        attempted = 0
         category_progress: dict[str, int] = {}
         try:
             for index, job in enumerate(self._jobs):
+                if self._control.stop_requested.is_set():
+                    break
+                self._control.wait_while_paused()
+                if self._control.stop_requested.is_set():
+                    break
+
                 category_progress[job.category] = category_progress.get(job.category, 0) + 1
                 remaining = total - index
                 self.job_starting.emit(
@@ -138,7 +148,7 @@ class _ConversionWorker(QThread):
                 )
                 try:
                     out_dir = resolve_output_dir(job.path.parent)
-                    result = convert_file(job.path, job.fmt, job.category, out_dir)
+                    result = convert_file(job.path, job.fmt, job.category, out_dir, control=self._control)
                     success, error = result.success, result.error or ""
                 except Exception as e:
                     # convert_file already never raises, but this safety net
@@ -146,14 +156,25 @@ class _ConversionWorker(QThread):
                     # per-job path, so one bad file can never again silently
                     # kill the whole background thread and hang the UI.
                     success, error = False, str(e)
-                if success:
-                    success_count += 1
-                self.job_finished.emit(job.category, job.row, success, error)
+
+                if not success and self._control.stop_requested.is_set():
+                    # Killed by a Stop request mid-conversion, not a real
+                    # failure - back to Ready rather than showing "Failed".
+                    self.job_reverted.emit(job.category, job.row)
+                else:
+                    attempted += 1
+                    if success:
+                        success_count += 1
+                    self.job_finished.emit(job.category, job.row, success, error)
+
+                if self._control.stop_requested.is_set():
+                    break
         finally:
             # Always emit, even if something above raised unexpectedly -
             # this is what lets the UI recover instead of staying locked
             # in "converting" state forever.
-            self.finished_all.emit(success_count, total)
+            stopped = self._control.stop_requested.is_set()
+            self.finished_all.emit(success_count, attempted if stopped else total, stopped)
 
 
 class MainWindow(QMainWindow):
@@ -168,6 +189,7 @@ class MainWindow(QMainWindow):
         self._table_category: dict[QTableWidget, str] = {}
         self._converting = False
         self._conversion_worker: _ConversionWorker | None = None
+        self._conversion_control: ConversionControl | None = None
         self._error_log: list[str] = []
 
         central = QWidget()
@@ -229,8 +251,6 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def _handle_table_key(self, category: str, table: QTableWidget, event) -> bool:
-        if self._converting:
-            return False
         selected_rows = {index.row() for index in table.selectionModel().selectedRows()}
         if not selected_rows:
             return False
@@ -243,6 +263,8 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
             return True
         if key == Qt.Key_Delete:
+            if self._converting:
+                return False
             self._remove_rows(category, selected_rows)
             return True
         return False
@@ -356,9 +378,9 @@ class MainWindow(QMainWindow):
         self.add_button.setMenu(add_menu)
         layout.addWidget(self.add_button)
 
-        self.clear_button = QPushButton("Clear all")
-        self.clear_button.clicked.connect(self._clear_all)
-        layout.addWidget(self.clear_button)
+        self.settings_button = QPushButton("Settings")
+        self.settings_button.clicked.connect(self._open_settings)
+        layout.addWidget(self.settings_button)
 
         self.bottom_status_label = QLabel("")
         self.bottom_status_label.setAlignment(Qt.AlignCenter)
@@ -369,9 +391,19 @@ class MainWindow(QMainWindow):
         self.details_button.clicked.connect(self._show_error_log)
         layout.addWidget(self.details_button)
 
-        self.settings_button = QPushButton("Settings")
-        self.settings_button.clicked.connect(self._open_settings)
-        layout.addWidget(self.settings_button)
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.setVisible(False)
+        self.pause_button.clicked.connect(self._toggle_pause)
+        layout.addWidget(self.pause_button)
+
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setVisible(False)
+        self.stop_button.clicked.connect(self._stop_conversion)
+        layout.addWidget(self.stop_button)
+
+        self.clear_button = QPushButton("Clear all")
+        self.clear_button.clicked.connect(self._clear_all)
+        layout.addWidget(self.clear_button)
 
         self.convert_button = QPushButton("Convert All")
         self.convert_button.setEnabled(False)
@@ -407,15 +439,11 @@ class MainWindow(QMainWindow):
         self._add_paths(paths)
 
     def _open_row_file(self, category: str, row: int, column: int) -> None:
-        if self._converting:
-            return
         table = self._group_sections[category].table
         path = Path(table.item(row, 0).data(Qt.UserRole))
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _show_context_menu(self, category: str, pos) -> None:
-        if self._converting:
-            return
         table = self._group_sections[category].table
         row = table.rowAt(pos.y())
         if row < 0:
@@ -427,14 +455,20 @@ class MainWindow(QMainWindow):
             table.selectRow(row)
             selected_rows = {row}
 
+        menu = self._build_context_menu(category, table, selected_rows)
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _build_context_menu(self, category: str, table: QTableWidget, selected_rows: set[int]) -> QMenu:
         menu = QMenu(self)
         convert_label = "Convert" if len(selected_rows) == 1 else f"Convert {len(selected_rows)} Files"
         convert_action = menu.addAction(convert_label)
+        convert_action.setEnabled(not self._converting)
         convert_action.triggered.connect(lambda: self._convert_selected(category, selected_rows))
 
         menu.addSeparator()
         remove_label = "Remove" if len(selected_rows) == 1 else f"Remove {len(selected_rows)} Files"
         remove_action = menu.addAction(remove_label)
+        remove_action.setEnabled(not self._converting)
         remove_action.triggered.connect(lambda: self._remove_rows(category, selected_rows))
 
         if len(selected_rows) == 1:
@@ -448,7 +482,7 @@ class MainWindow(QMainWindow):
                 lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
             )
 
-        menu.exec(table.viewport().mapToGlobal(pos))
+        return menu
 
     def _remove_rows(self, category: str, rows: set[int]) -> None:
         section = self._group_sections[category]
@@ -727,12 +761,40 @@ class MainWindow(QMainWindow):
     def _start_conversion(self, jobs: list[_ConversionJob], category_totals: dict[str, int]) -> None:
         self._converting = True
         self._set_all_controls_enabled(False)
+        self._set_bottom_bar_mode(processing=True)
+        self.pause_button.setText("Pause")
+        self.pause_button.setEnabled(True)
+        self.stop_button.setEnabled(True)
 
-        self._conversion_worker = _ConversionWorker(jobs, category_totals)
+        self._conversion_control = ConversionControl()
+        self._conversion_worker = _ConversionWorker(jobs, category_totals, self._conversion_control)
         self._conversion_worker.job_starting.connect(self._on_job_starting)
         self._conversion_worker.job_finished.connect(self._on_job_finished)
+        self._conversion_worker.job_reverted.connect(self._on_job_reverted)
         self._conversion_worker.finished_all.connect(self._on_conversion_finished)
         self._conversion_worker.start()
+
+    def _toggle_pause(self) -> None:
+        if self._conversion_control is None:
+            return
+        if self._conversion_control.pause_requested.is_set():
+            self._conversion_control.pause_requested.clear()
+            self.pause_button.setText("Pause")
+        else:
+            self._conversion_control.pause_requested.set()
+            self.pause_button.setText("Resume")
+
+    def _stop_conversion(self) -> None:
+        if self._conversion_control is None:
+            return
+        self.stop_button.setEnabled(False)
+        self._conversion_control.request_stop()
+
+    def _set_bottom_bar_mode(self, processing: bool) -> None:
+        self.clear_button.setVisible(not processing)
+        self.convert_button.setVisible(not processing)
+        self.pause_button.setVisible(processing)
+        self.stop_button.setVisible(processing)
 
     def _set_all_controls_enabled(self, enabled: bool) -> None:
         for section in self._group_sections.values():
@@ -789,6 +851,12 @@ class MainWindow(QMainWindow):
             name = self._group_sections[category].table.item(row, 0).text()
             self._log_error(category, name, error)
 
+    def _on_job_reverted(self, category: str, row: int) -> None:
+        status_item = self._group_sections[category].table.item(row, 3)
+        status_item.setText("Ready")
+        status_item.setForeground(QBrush())
+        status_item.setToolTip("")
+
     def _log_error(self, category: str, name: str, error: str) -> None:
         timestamp = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
         self._error_log.append(f"[{timestamp}] [{category}] {name}\n{error.strip() or 'unknown error'}")
@@ -817,9 +885,14 @@ class MainWindow(QMainWindow):
 
         dialog.exec()
 
-    def _on_conversion_finished(self, success_count: int, total: int) -> None:
-        file_word = "file" if total == 1 else "files"
-        self.bottom_status_label.setText(f"Successfully converted {success_count}/{total} {file_word}")
+    def _on_conversion_finished(self, success_count: int, attempted: int, stopped: bool) -> None:
+        file_word = "file" if attempted == 1 else "files"
+        if stopped:
+            self.bottom_status_label.setText(f"Stopped — {success_count}/{attempted} {file_word} converted")
+        else:
+            self.bottom_status_label.setText(f"Successfully converted {success_count}/{attempted} {file_word}")
         self._converting = False
         self._set_all_controls_enabled(True)
+        self._set_bottom_bar_mode(processing=False)
         self._conversion_worker = None
+        self._conversion_control = None
