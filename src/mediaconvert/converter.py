@@ -17,9 +17,10 @@ class ConversionResult:
     error: str | None
 
 
-def convert_file(src: Path, fmt: str, category: str) -> ConversionResult:
-    """Convert src to fmt. Never raises - failures are reported in the result."""
-    out_path = resolve_output_path(src, fmt)
+def convert_file(src: Path, fmt: str, category: str, out_dir: Path | None = None) -> ConversionResult:
+    """Convert src to fmt, writing into out_dir (or next to src if out_dir is
+    None). Never raises - failures are reported in the result."""
+    out_path = resolve_output_path(src, fmt, out_dir)
     try:
         if category == "image":
             convert_image(src, out_path, fmt)

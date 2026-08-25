@@ -17,6 +17,17 @@ AUDIO_FORMATS = {
     "wav",
 }
 
+_IMAGE_PRIORITY = ["png", "jpg", "jpeg", "webp"]
+_VIDEO_PRIORITY = ["mp4", "mov", "webm", "gif"]
+_AUDIO_PRIORITY = ["mp3", "wav", "aac", "flac"]
+
+
+def _ordered(formats: set[str], priority: list[str]) -> list[str]:
+    """Priority formats first (in the given order), then the rest alphabetically."""
+    rest = sorted(formats - set(priority))
+    return [f for f in priority if f in formats] + rest
+
+
 class MixedCategoryError(Exception):
     """Raised when a batch mixes categories or contains an unknown extension."""
 
@@ -37,17 +48,19 @@ def categorize(paths: list[Path]) -> str:
     categories = {_category_of(p) for p in paths}
     if len(categories) != 1:
         raise MixedCategoryError(
-            "Can't mix images, video, and audio in one batch"
+            "Can't mix images, video, and audio in one batch, please try again"
         )
     return categories.pop()
 
 
 def target_formats(category: str) -> list[str]:
-    """Selectable output formats for a batch of the given category."""
+    """Selectable output formats for a batch of the given category, most
+    common formats first."""
     if category == "image":
-        return sorted(IMAGE_FORMATS)
+        return _ordered(IMAGE_FORMATS, _IMAGE_PRIORITY)
     if category == "audio":
-        return sorted(AUDIO_FORMATS)
+        return _ordered(AUDIO_FORMATS, _AUDIO_PRIORITY)
     if category == "video":
-        return sorted(VIDEO_FORMATS | {"gif", "webp"} | AUDIO_FORMATS)
+        video_and_gif = _ordered(VIDEO_FORMATS | {"gif", "webp"}, _VIDEO_PRIORITY)
+        return video_and_gif + _ordered(AUDIO_FORMATS, _AUDIO_PRIORITY)
     raise ValueError(f"Unknown category: {category}")
