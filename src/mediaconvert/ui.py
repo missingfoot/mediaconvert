@@ -416,6 +416,7 @@ class MainWindow(QMainWindow):
         self.convert_button.setEnabled(False)
         self.add_button.setEnabled(False)
 
+        disabled_tables = []
         try:
             total = 0
             success_count = 0
@@ -428,6 +429,7 @@ class MainWindow(QMainWindow):
                     continue
                 table = section.table
                 table.setSortingEnabled(False)
+                disabled_tables.append(table)
                 for row in range(table.rowCount()):
                     total += 1
                     name_item = table.item(row, 0)
@@ -450,10 +452,11 @@ class MainWindow(QMainWindow):
                         status_item.setText(f"Failed: {short_error}")
                         status_item.setToolTip(result.error or "")
                         status_item.setForeground(QBrush(QColor("#e74c3c")))
-                table.setSortingEnabled(True)
 
             self.bottom_status_label.setText(f"Converted {success_count}/{total} file(s)")
         finally:
+            for table in disabled_tables:
+                table.setSortingEnabled(True)
             self._converting = False
             self.convert_button.setEnabled(True)
             self.add_button.setEnabled(True)
