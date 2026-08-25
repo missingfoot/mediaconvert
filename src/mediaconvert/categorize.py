@@ -1,4 +1,4 @@
-"""Format lists and batch category detection for mediaconvert."""
+"""Format lists and per-file category classification for mediaconvert."""
 
 from pathlib import Path
 
@@ -17,6 +17,8 @@ AUDIO_FORMATS = {
     "wav",
 }
 
+CATEGORY_ORDER = ["video", "image", "audio"]
+
 _IMAGE_PRIORITY = ["png", "jpg", "jpeg", "webp"]
 _VIDEO_PRIORITY = ["mp4", "mov", "webm", "gif"]
 _AUDIO_PRIORITY = ["mp3", "wav", "aac", "flac"]
@@ -28,11 +30,9 @@ def _ordered(formats: set[str], priority: list[str]) -> list[str]:
     return [f for f in priority if f in formats] + rest
 
 
-class MixedCategoryError(Exception):
-    """Raised when a batch mixes categories or contains an unknown extension."""
-
-
-def _category_of(path: Path) -> str:
+def category_of(path: Path) -> str | None:
+    """Return "image", "video", or "audio" for path's extension, or None if
+    the extension isn't recognized."""
     ext = path.suffix.lower().lstrip(".")
     if ext in IMAGE_FORMATS:
         return "image"
@@ -40,17 +40,23 @@ def _category_of(path: Path) -> str:
         return "video"
     if ext in AUDIO_FORMATS:
         return "audio"
-    raise MixedCategoryError(f"Unrecognized file type: {path.name}")
+    return None
 
 
-def categorize(paths: list[Path]) -> str:
-    """Return "image", "video", or "audio" for a batch, or raise MixedCategoryError."""
-    categories = {_category_of(p) for p in paths}
-    if len(categories) != 1:
-        raise MixedCategoryError(
-            "Can't mix images, video, and audio in one batch, please try again"
-        )
-    return categories.pop()
+def split_by_category(paths: list[Path]) -> tuple[dict[str, list[Path]], list[Path]]:
+    """Bucket paths by category, preserving input order within each bucket.
+    Only categories with at least one matching file appear as keys. Returns
+    (groups, ignored) where ignored holds paths with unrecognized
+    extensions."""
+    groups: dict[str, list[Path]] = {}
+    ignored: list[Path] = []
+    for path in paths:
+        category = category_of(path)
+        if category is None:
+            ignored.append(path)
+        else:
+            groups.setdefault(category, []).append(path)
+    return groups, ignored
 
 
 def target_formats(category: str) -> list[str]:
