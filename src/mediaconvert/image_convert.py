@@ -8,12 +8,17 @@ from pathlib import Path
 # through `magick` first (cwebp doesn't understand bmp/avif/heic/etc).
 _CWEBP_READABLE = {".png", ".jpg", ".jpeg", ".jfif", ".tif", ".tiff", ".webp"}
 
+# See media_convert.TIMEOUT_SECONDS for why stdin is redirected and a
+# timeout is always set on every subprocess call in this module.
+TIMEOUT_SECONDS = 600
+
 
 def _largest_ico_frame_index(src: Path) -> int:
     """Index of the largest frame (by pixel area) in a multi-frame .ico."""
     result = subprocess.run(
         ["magick", "identify", "-format", "%wx%h\n", str(src)],
         capture_output=True, text=True,
+        stdin=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         # Fall back to frame 0 - an intentional, documented choice rather
@@ -23,7 +28,12 @@ def _largest_ico_frame_index(src: Path) -> int:
     best_area = -1
     for idx, line in enumerate(result.stdout.strip().splitlines()):
         w, _, h = line.partition("x")
-        area = int(w) * int(h)
+        try:
+            area = int(w) * int(h)
+        except ValueError:
+            # A line that isn't a clean WxH dimension - skip it rather than
+            # letting a malformed identify() output crash the conversion.
+            continue
         if area > best_area:
             best_area = area
             best_idx = idx
@@ -38,7 +48,13 @@ def _magick_src(src: Path) -> str:
 
 
 def _run(cmd: list[str]) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{cmd[0]} timed out after {TIMEOUT_SECONDS}s")
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"Command failed: {' '.join(cmd)}")
 
@@ -46,10 +62,14 @@ def _run(cmd: list[str]) -> None:
 def _convert_to_webp(src: Path, magick_src: str, out_path: Path) -> None:
     is_animated_gif = src.suffix.lower() == ".gif"
     if is_animated_gif:
-        result = subprocess.run(
-            ["gif2webp", "-lossy", "-q", "85", "-m", "4", str(src), "-o", str(out_path)],
-            capture_output=True, text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["gif2webp", "-lossy", "-q", "85", "-m", "4", str(src), "-o", str(out_path)],
+                capture_output=True, text=True,
+                stdin=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"gif2webp timed out after {TIMEOUT_SECONDS}s")
         if result.returncode == 0:
             return
         # Fall through to cwebp as a defensive fallback if gif2webp fails.

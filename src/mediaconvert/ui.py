@@ -3,18 +3,20 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QThread, QUrl, Qt, Signal
+from PySide6.QtCore import QDateTime, QEvent, QThread, QUrl, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
+    QGuiApplication,
     QIcon,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QStackedWidget,
     QStyle,
@@ -125,19 +128,32 @@ class _ConversionWorker(QThread):
         total = len(self._jobs)
         success_count = 0
         category_progress: dict[str, int] = {}
-        for index, job in enumerate(self._jobs):
-            category_progress[job.category] = category_progress.get(job.category, 0) + 1
-            remaining = total - index
-            self.job_starting.emit(
-                job.category, job.row, category_progress[job.category],
-                self._category_totals[job.category], remaining,
-            )
-            out_dir = resolve_output_dir(job.path.parent)
-            result = convert_file(job.path, job.fmt, job.category, out_dir)
-            if result.success:
-                success_count += 1
-            self.job_finished.emit(job.category, job.row, result.success, result.error or "")
-        self.finished_all.emit(success_count, total)
+        try:
+            for index, job in enumerate(self._jobs):
+                category_progress[job.category] = category_progress.get(job.category, 0) + 1
+                remaining = total - index
+                self.job_starting.emit(
+                    job.category, job.row, category_progress[job.category],
+                    self._category_totals[job.category], remaining,
+                )
+                try:
+                    out_dir = resolve_output_dir(job.path.parent)
+                    result = convert_file(job.path, job.fmt, job.category, out_dir)
+                    success, error = result.success, result.error or ""
+                except Exception as e:
+                    # convert_file already never raises, but this safety net
+                    # guards against any other unexpected error in this
+                    # per-job path, so one bad file can never again silently
+                    # kill the whole background thread and hang the UI.
+                    success, error = False, str(e)
+                if success:
+                    success_count += 1
+                self.job_finished.emit(job.category, job.row, success, error)
+        finally:
+            # Always emit, even if something above raised unexpectedly -
+            # this is what lets the UI recover instead of staying locked
+            # in "converting" state forever.
+            self.finished_all.emit(success_count, total)
 
 
 class MainWindow(QMainWindow):
@@ -152,6 +168,7 @@ class MainWindow(QMainWindow):
         self._table_category: dict[QTableWidget, str] = {}
         self._converting = False
         self._conversion_worker: _ConversionWorker | None = None
+        self._error_log: list[str] = []
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -346,6 +363,11 @@ class MainWindow(QMainWindow):
         self.bottom_status_label = QLabel("")
         self.bottom_status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.bottom_status_label, stretch=1)
+
+        self.details_button = QPushButton("Details")
+        self.details_button.setVisible(False)
+        self.details_button.clicked.connect(self._show_error_log)
+        layout.addWidget(self.details_button)
 
         self.settings_button = QPushButton("Settings")
         self.settings_button.clicked.connect(self._open_settings)
@@ -764,6 +786,36 @@ class MainWindow(QMainWindow):
             status_item.setText(f"Failed: {short_error}")
             status_item.setToolTip(error)
             status_item.setForeground(QBrush(QColor("#e74c3c")))
+            name = self._group_sections[category].table.item(row, 0).text()
+            self._log_error(category, name, error)
+
+    def _log_error(self, category: str, name: str, error: str) -> None:
+        timestamp = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
+        self._error_log.append(f"[{timestamp}] [{category}] {name}\n{error.strip() or 'unknown error'}")
+        self.details_button.setVisible(True)
+
+    def _show_error_log(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Error Log")
+        dialog.resize(640, 420)
+        layout = QVBoxLayout(dialog)
+
+        text_view = QPlainTextEdit()
+        text_view.setReadOnly(True)
+        text_view.setPlainText("\n\n".join(self._error_log))
+        layout.addWidget(text_view)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        copy_button = QPushButton("Copy All")
+        copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(text_view.toPlainText()))
+        button_row.addWidget(copy_button)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        dialog.exec()
 
     def _on_conversion_finished(self, success_count: int, total: int) -> None:
         file_word = "file" if total == 1 else "files"

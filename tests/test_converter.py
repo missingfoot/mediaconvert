@@ -64,6 +64,20 @@ def test_convert_file_success_audio(tmp_path):
     assert result.out_path.exists()
 
 
+def test_convert_file_catches_any_exception_not_just_runtimeerror(tmp_path, monkeypatch):
+    from mediaconvert import converter
+
+    def boom(*args, **kwargs):
+        raise ValueError("unexpected boom")
+
+    monkeypatch.setattr(converter, "convert_image", boom)
+    src = tmp_path / "a.png"
+    src.write_bytes(b"stub")
+    result = convert_file(src, "bmp", "image")
+    assert result.success is False
+    assert "unexpected boom" in result.error
+
+
 def test_convert_file_collision_gets_suffix(tmp_path):
     src = tmp_path / "a.png"
     _make_png(src)

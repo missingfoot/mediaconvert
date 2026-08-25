@@ -1,9 +1,10 @@
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from mediaconvert.image_convert import convert_image
+from mediaconvert.image_convert import _largest_ico_frame_index, _run, convert_image
 
 
 def _make_png(path: Path, size="32x32", color="red"):
@@ -153,3 +154,26 @@ def test_convert_failure_raises_runtime_error(tmp_path):
     out = tmp_path / "out.bmp"
     with pytest.raises(RuntimeError):
         convert_image(src, out, "bmp")
+
+
+def test_largest_ico_frame_index_handles_malformed_identify_output(tmp_path):
+    src = tmp_path / "a.ico"
+    src.write_bytes(b"stub")
+    fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="not-a-dimension\n", stderr="")
+    with patch("mediaconvert.image_convert.subprocess.run", return_value=fake_result):
+        assert _largest_ico_frame_index(src) == 0
+
+
+def test_run_redirects_stdin_and_sets_timeout():
+    with patch("mediaconvert.image_convert.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        _run(["magick", "a", "b"])
+    _, kwargs = mock_run.call_args
+    assert kwargs.get("stdin") == subprocess.DEVNULL
+    assert kwargs.get("timeout")
+
+
+def test_run_timeout_reports_as_failure_not_hang():
+    with patch("mediaconvert.image_convert.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="magick", timeout=1)):
+        with pytest.raises(RuntimeError, match="timed out"):
+            _run(["magick", "a", "b"])
