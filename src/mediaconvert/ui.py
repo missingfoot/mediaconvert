@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QUrl, Qt
+from PySide6.QtCore import QEvent, QThread, QUrl, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -14,7 +14,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QStyle,
@@ -41,6 +41,49 @@ _ARROW_DOWN_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" hei
 _CIRCLE_ALERT_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>"""
 _DEFAULT_HINT = "Click to add or drag and drop image, video, or audio files"
 
+_ICON_NAME_BY_EXTENSION: dict[str, str] = {
+    # image
+    "avif": "image-avif",
+    "bmp": "image-bmp",
+    "gif": "image-gif",
+    "heic": "image-heic",
+    "ico": "image-x-icon",
+    "jfif": "image-jpeg",
+    "jpeg": "image-jpeg",
+    "jpg": "image-jpeg",
+    "png": "image-png",
+    "tiff": "image-tiff",
+    "webp": "image-webp",
+    # video
+    "avi": "video-x-msvideo",
+    "m2ts": "video-mp2t",
+    "m4v": "video-mp4",
+    "mkv": "video-x-matroska",
+    "mov": "video-quicktime",
+    "mp4": "video-mp4",
+    "mpeg": "video-mpeg",
+    "mpg": "video-mpeg",
+    "mts": "video-mp2t",
+    "ogg": "video-ogg",
+    "ogv": "video-ogg",
+    "swf": "application-x-shockwave-flash",
+    "ts": "video-mp2t",
+    "vob": "video-x-generic",
+    "webm": "video-webm",
+    "wmv": "video-x-ms-wmv",
+    # audio
+    "aac": "audio-aac",
+    "aifc": "audio-x-aiff",
+    "aiff": "audio-x-aiff",
+    "flac": "audio-flac",
+    "m4a": "audio-x-m4a",
+    "m4b": "audio-x-m4a",
+    "mp3": "audio-mp3",
+    "opus": "audio-opus",
+    "voc": "audio-x-generic",
+    "wav": "audio-x-wav",
+}
+
 
 def _pluralize(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
@@ -52,19 +95,63 @@ class GroupSection:
     header_label: QLabel
     combo: QComboBox
     options_button: QPushButton
+    clear_button: QPushButton
+    convert_button: QPushButton
     table: QTableWidget
+
+
+@dataclass
+class _ConversionJob:
+    category: str
+    row: int
+    path: Path
+    fmt: str
+
+
+class _ConversionWorker(QThread):
+    """Runs conversions off the GUI thread; only emits signals, never
+    touches widgets directly (Qt widgets are not thread-safe)."""
+
+    job_starting = Signal(str, int, int, int, int)  # category, row, index_in_category, total_in_category, remaining_overall
+    job_finished = Signal(str, int, bool, str)  # category, row, success, error
+    finished_all = Signal(int, int)  # success_count, total
+
+    def __init__(self, jobs: list[_ConversionJob], category_totals: dict[str, int]):
+        super().__init__()
+        self._jobs = jobs
+        self._category_totals = category_totals
+
+    def run(self) -> None:
+        total = len(self._jobs)
+        success_count = 0
+        category_progress: dict[str, int] = {}
+        for index, job in enumerate(self._jobs):
+            category_progress[job.category] = category_progress.get(job.category, 0) + 1
+            remaining = total - index
+            self.job_starting.emit(
+                job.category, job.row, category_progress[job.category],
+                self._category_totals[job.category], remaining,
+            )
+            out_dir = resolve_output_dir(job.path.parent)
+            result = convert_file(job.path, job.fmt, job.category, out_dir)
+            if result.success:
+                success_count += 1
+            self.job_finished.emit(job.category, job.row, result.success, result.error or "")
+        self.finished_all.emit(success_count, total)
 
 
 class MainWindow(QMainWindow):
     def __init__(self, initial_paths: list[Path] | None = None):
         super().__init__()
         self.setWindowTitle("Convert")
-        self.resize(820, 600)
+        self.resize(1080, 820)
         self.setAcceptDrops(True)
 
         self._groups: dict[str, list[Path]] = {}
         self._group_sections: dict[str, GroupSection] = {}
+        self._table_category: dict[QTableWidget, str] = {}
         self._converting = False
+        self._conversion_worker: _ConversionWorker | None = None
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -119,7 +206,29 @@ class MainWindow(QMainWindow):
         if obj is self._drop_box and event.type() == QEvent.MouseButtonRelease:
             self._open_files_dialog()
             return True
+        if event.type() == QEvent.KeyPress and obj in self._table_category:
+            if self._handle_table_key(self._table_category[obj], obj, event):
+                return True
         return super().eventFilter(obj, event)
+
+    def _handle_table_key(self, category: str, table: QTableWidget, event) -> bool:
+        if self._converting:
+            return False
+        selected_rows = {index.row() for index in table.selectionModel().selectedRows()}
+        if not selected_rows:
+            return False
+        key = event.key()
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            if len(selected_rows) != 1:
+                return False
+            (row,) = selected_rows
+            path = Path(table.item(row, 0).data(Qt.UserRole))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            return True
+        if key == Qt.Key_Delete:
+            self._remove_rows(category, selected_rows)
+            return True
+        return False
 
     def _build_list_page(self) -> QWidget:
         page = QWidget()
@@ -127,15 +236,15 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        for category in CATEGORY_ORDER:
-            section = self._build_group_section(category)
+        for index, category in enumerate(CATEGORY_ORDER):
+            section = self._build_group_section(category, is_first=index == 0)
             self._group_sections[category] = section
             section.container.hide()
             layout.addWidget(section.container, stretch=1)
 
         return page
 
-    def _build_group_section(self, category: str) -> GroupSection:
+    def _build_group_section(self, category: str, is_first: bool) -> GroupSection:
         container = QWidget()
         outer = QVBoxLayout(container)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -143,24 +252,41 @@ class MainWindow(QMainWindow):
 
         header = QWidget()
         header.setObjectName("groupHeader")
-        header.setStyleSheet(
-            "#groupHeader { border-bottom: 1px solid rgba(127, 127, 127, 90); }"
-        )
+        border_rules = "border-bottom: 1px solid rgba(127, 127, 127, 90);"
+        if not is_first:
+            border_rules += " border-top: 1px solid rgba(127, 127, 127, 90);"
+        header.setStyleSheet(f"#groupHeader {{ {border_rules} }}")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(8, 8, 8, 8)
 
+        header_icon_label = QLabel()
+        header_layout.addWidget(header_icon_label)
         header_label = QLabel("")
         header_layout.addWidget(header_label)
         header_layout.addStretch(1)
         header_layout.addWidget(QLabel("Convert to:"))
         combo = QComboBox()
+        combo.currentTextChanged.connect(lambda _text, cat=category: self._on_format_changed(cat))
         header_layout.addWidget(combo)
         options_button = QPushButton("Options")
         options_button.setEnabled(False)
         header_layout.addWidget(options_button)
+        clear_button = QPushButton("Clear")
+        clear_button.setVisible(False)
+        clear_button.clicked.connect(lambda _checked=False, cat=category: self._clear_group(cat))
+        header_layout.addWidget(clear_button)
+        convert_button = QPushButton("Convert")
+        convert_button.setVisible(False)
+        convert_button.clicked.connect(lambda _checked=False, cat=category: self._convert_group(cat))
+        header_layout.addWidget(convert_button)
+
+        icon_size = options_button.sizeHint().height()
+        header_icon_label.setPixmap(self._icon_for_category(category).pixmap(icon_size, icon_size))
         outer.addWidget(header)
 
         table = QTableWidget(0, 4)
+        table.installEventFilter(self)
+        self._table_category[table] = category
         table.setHorizontalHeaderLabels(["File Name", "Size", "Type", "Status"])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -194,6 +320,8 @@ class MainWindow(QMainWindow):
             header_label=header_label,
             combo=combo,
             options_button=options_button,
+            clear_button=clear_button,
+            convert_button=convert_button,
             table=table,
         )
 
@@ -205,8 +333,15 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
 
         self.add_button = QPushButton("Add files")
-        self.add_button.clicked.connect(self._open_files_dialog)
+        add_menu = QMenu(self)
+        add_menu.addAction("Add Files…", self._open_files_dialog)
+        add_menu.addAction("Add Folder…", self._open_folder_dialog)
+        self.add_button.setMenu(add_menu)
         layout.addWidget(self.add_button)
+
+        self.clear_button = QPushButton("Clear all")
+        self.clear_button.clicked.connect(self._clear_all)
+        layout.addWidget(self.clear_button)
 
         self.bottom_status_label = QLabel("")
         self.bottom_status_label.setAlignment(Qt.AlignCenter)
@@ -216,7 +351,7 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(self._open_settings)
         layout.addWidget(self.settings_button)
 
-        self.convert_button = QPushButton("Convert")
+        self.convert_button = QPushButton("Convert All")
         self.convert_button.setEnabled(False)
         self.convert_button.clicked.connect(self._convert_batch)
         layout.addWidget(self.convert_button)
@@ -271,6 +406,11 @@ class MainWindow(QMainWindow):
             selected_rows = {row}
 
         menu = QMenu(self)
+        convert_label = "Convert" if len(selected_rows) == 1 else f"Convert {len(selected_rows)} Files"
+        convert_action = menu.addAction(convert_label)
+        convert_action.triggered.connect(lambda: self._convert_selected(category, selected_rows))
+
+        menu.addSeparator()
         remove_label = "Remove" if len(selected_rows) == 1 else f"Remove {len(selected_rows)} Files"
         remove_action = menu.addAction(remove_label)
         remove_action.triggered.connect(lambda: self._remove_rows(category, selected_rows))
@@ -305,6 +445,7 @@ class MainWindow(QMainWindow):
 
         if not self._groups:
             self._show_empty_state(_DEFAULT_HINT)
+        self._update_section_button_visibility()
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
@@ -315,6 +456,34 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(self, "Open files")
         if files:
             self._add_paths([Path(f) for f in files])
+
+    def _open_folder_dialog(self) -> None:
+        if self._converting:
+            return
+        directory = QFileDialog.getExistingDirectory(self, "Select folder")
+        if directory:
+            self._add_paths([Path(directory)])
+
+    def _clear_all(self) -> None:
+        if self._converting:
+            return
+        for section in self._group_sections.values():
+            section.table.setRowCount(0)
+            section.container.hide()
+        self._groups.clear()
+        self._show_empty_state(_DEFAULT_HINT)
+
+    def _clear_group(self, category: str) -> None:
+        if self._converting or category not in self._groups:
+            return
+        table = self._group_sections[category].table
+        self._remove_rows(category, set(range(table.rowCount())))
+
+    def _update_section_button_visibility(self) -> None:
+        show_section_buttons = len(self._groups) > 1
+        for section in self._group_sections.values():
+            section.clear_button.setVisible(show_section_buttons)
+            section.convert_button.setVisible(show_section_buttons)
 
     # -- icons and row formatting ----------------------------------------------
 
@@ -335,6 +504,14 @@ class MainWindow(QMainWindow):
         }
         return style.standardIcon(fallback_map.get(category, QStyle.SP_FileIcon))
 
+    def _icon_for_path(self, path: Path, category: str) -> QIcon:
+        theme_name = _ICON_NAME_BY_EXTENSION.get(path.suffix.lower().lstrip("."))
+        if theme_name:
+            icon = QIcon.fromTheme(theme_name)
+            if not icon.isNull():
+                return icon
+        return self._icon_for_category(category)
+
     @staticmethod
     def _human_size(path: Path) -> str:
         try:
@@ -354,9 +531,62 @@ class MainWindow(QMainWindow):
 
     # -- batch loading and conversion ---------------------------------------
 
+    def _expand_folders(self, paths: list[Path]) -> list[Path] | None:
+        """Replace any directories in paths with the files they contain.
+        Returns None if the user cancelled the top-level-vs-recursive
+        prompt (shown once, for the whole batch, only when at least one
+        folder has subfolders of its own)."""
+        folders = [p for p in paths if p.is_dir()]
+        files = [p for p in paths if not p.is_dir()]
+
+        def has_subfolders(folder: Path) -> bool:
+            try:
+                return any(child.is_dir() for child in folder.iterdir())
+            except OSError:
+                return False
+
+        recursive = False
+        if any(has_subfolders(folder) for folder in folders):
+            choice = self._ask_recursive_expansion()
+            if choice is None:
+                return None
+            recursive = choice
+
+        expanded = list(files)
+        for folder in folders:
+            try:
+                contents = folder.rglob("*") if recursive else folder.iterdir()
+                expanded.extend(sorted(p for p in contents if p.is_file()))
+            except OSError:
+                continue
+        return expanded
+
+    def _ask_recursive_expansion(self) -> bool | None:
+        box = QMessageBox(self)
+        box.setWindowTitle("Add Folder")
+        box.setText(
+            "This folder contains subfolders. Add files from the top level "
+            "only, or include files from subfolders too?"
+        )
+        top_level_button = box.addButton("Top Level Only", QMessageBox.AcceptRole)
+        recursive_button = box.addButton("Include Subfolders", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked in (top_level_button, recursive_button):
+            return clicked is recursive_button
+        return None
+
     def _add_paths(self, paths: list[Path]) -> None:
         if not paths or self._converting:
             return
+
+        if any(p.is_dir() for p in paths):
+            expanded = self._expand_folders(paths)
+            if expanded is None:
+                return
+            paths = expanded
+
         groups, ignored = split_by_category(paths)
 
         if not self._groups and not groups:
@@ -368,6 +598,7 @@ class MainWindow(QMainWindow):
             added_count += len(new_paths)
             self._add_to_group(category, new_paths)
 
+        self._update_section_button_visibility()
         self._show_list_state()
         self._set_add_status(added_count, len(ignored))
 
@@ -383,13 +614,12 @@ class MainWindow(QMainWindow):
             section.combo.addItems(target_formats(category))
 
         section.table.setSortingEnabled(False)
-        icon = self._icon_for_category(category)
         start_row = section.table.rowCount()
         section.table.setRowCount(start_row + len(new_paths))
         for offset, p in enumerate(new_paths):
             row = start_row + offset
             name_item = QTableWidgetItem(p.name)
-            name_item.setIcon(icon)
+            name_item.setIcon(self._icon_for_path(p, category))
             name_item.setData(Qt.UserRole, str(p))
             section.table.setItem(row, 0, name_item)
             section.table.setItem(row, 1, QTableWidgetItem(self._human_size(p)))
@@ -410,53 +640,134 @@ class MainWindow(QMainWindow):
         self.bottom_status_label.setText(text)
 
     def _convert_batch(self) -> None:
-        if not self._groups:
+        if not self._groups or self._converting:
             return
+
+        jobs: list[_ConversionJob] = []
+        category_totals: dict[str, int] = {}
+        for category in CATEGORY_ORDER:
+            if category not in self._groups:
+                continue
+            section = self._group_sections[category]
+            fmt = section.combo.currentText()
+            if not fmt:
+                continue
+            table = section.table
+            pending_rows = [
+                row for row in range(table.rowCount()) if table.item(row, 3).text() != "Done"
+            ]
+            if not pending_rows:
+                continue
+            category_totals[category] = len(pending_rows)
+            for row in pending_rows:
+                path = Path(table.item(row, 0).data(Qt.UserRole))
+                jobs.append(_ConversionJob(category, row, path, fmt))
+
+        if not jobs:
+            return
+
+        self._start_conversion(jobs, category_totals)
+
+    def _convert_selected(self, category: str, rows: set[int]) -> None:
+        if self._converting:
+            return
+        section = self._group_sections[category]
+        fmt = section.combo.currentText()
+        if not fmt:
+            return
+        jobs = [
+            _ConversionJob(category, row, Path(section.table.item(row, 0).data(Qt.UserRole)), fmt)
+            for row in sorted(rows)
+        ]
+        if not jobs:
+            return
+        self._start_conversion(jobs, {category: len(jobs)})
+
+    def _convert_group(self, category: str) -> None:
+        if self._converting or category not in self._groups:
+            return
+        section = self._group_sections[category]
+        fmt = section.combo.currentText()
+        if not fmt:
+            return
+        table = section.table
+        pending_rows = [
+            row for row in range(table.rowCount()) if table.item(row, 3).text() != "Done"
+        ]
+        if not pending_rows:
+            return
+        jobs = [
+            _ConversionJob(category, row, Path(table.item(row, 0).data(Qt.UserRole)), fmt)
+            for row in pending_rows
+        ]
+        self._start_conversion(jobs, {category: len(jobs)})
+
+    def _start_conversion(self, jobs: list[_ConversionJob], category_totals: dict[str, int]) -> None:
         self._converting = True
-        self.convert_button.setEnabled(False)
-        self.add_button.setEnabled(False)
+        self._set_all_controls_enabled(False)
 
-        disabled_tables = []
-        try:
-            total = 0
-            success_count = 0
-            for category in CATEGORY_ORDER:
-                if category not in self._groups:
-                    continue
-                section = self._group_sections[category]
-                fmt = section.combo.currentText()
-                if not fmt:
-                    continue
-                table = section.table
-                table.setSortingEnabled(False)
-                disabled_tables.append(table)
-                for row in range(table.rowCount()):
-                    total += 1
-                    name_item = table.item(row, 0)
-                    path = Path(name_item.data(Qt.UserRole))
-                    status_item = table.item(row, 3)
-                    status_item.setForeground(QBrush())
-                    status_item.setText("Converting…")
-                    QApplication.processEvents()
-                    out_dir = resolve_output_dir(path.parent)
-                    result = convert_file(path, fmt, category, out_dir)
-                    if result.success:
-                        success_count += 1
-                        status_item.setText("Done")
-                        status_item.setForeground(QBrush(QColor("#2ecc71")))
-                    else:
-                        error_summary = (result.error or "").strip().splitlines()
-                        short_error = error_summary[-1] if error_summary else "unknown error"
-                        if len(short_error) > 120:
-                            short_error = short_error[:117] + "..."
-                        status_item.setText(f"Failed: {short_error}")
-                        status_item.setToolTip(result.error or "")
-                        status_item.setForeground(QBrush(QColor("#e74c3c")))
+        self._conversion_worker = _ConversionWorker(jobs, category_totals)
+        self._conversion_worker.job_starting.connect(self._on_job_starting)
+        self._conversion_worker.job_finished.connect(self._on_job_finished)
+        self._conversion_worker.finished_all.connect(self._on_conversion_finished)
+        self._conversion_worker.start()
 
-            self.bottom_status_label.setText(f"Converted {success_count}/{total} file(s)")
-        finally:
-            for table in disabled_tables:
-                table.setSortingEnabled(True)
-            self._converting = False
-            self.convert_button.setEnabled(True)
-            self.add_button.setEnabled(True)
+    def _set_all_controls_enabled(self, enabled: bool) -> None:
+        for section in self._group_sections.values():
+            section.table.setSortingEnabled(enabled)
+            section.combo.setEnabled(enabled)
+            section.clear_button.setEnabled(enabled)
+            section.convert_button.setEnabled(enabled)
+        self.convert_button.setEnabled(enabled)
+        self.add_button.setEnabled(enabled)
+        self.clear_button.setEnabled(enabled)
+
+    def _on_format_changed(self, category: str) -> None:
+        if self._converting:
+            return
+        section = self._group_sections.get(category)
+        if section is None:
+            return
+        table = section.table
+        for row in range(table.rowCount()):
+            status_item = table.item(row, 3)
+            if status_item is None:
+                continue
+            status_item.setText("Ready")
+            status_item.setForeground(QBrush())
+            status_item.setToolTip("")
+
+    def _on_job_starting(
+        self, category: str, row: int, index_in_category: int, total_in_category: int, remaining: int
+    ) -> None:
+        status_item = self._group_sections[category].table.item(row, 3)
+        status_item.setForeground(QBrush())
+        status_item.setText("Converting…")
+
+        category_word = "file" if total_in_category == 1 else "files"
+        remaining_word = "file" if remaining == 1 else "files"
+        self.bottom_status_label.setText(
+            f"Converting {index_in_category} / {total_in_category} {category} {category_word}, "
+            f"{remaining} {remaining_word} remaining"
+        )
+
+    def _on_job_finished(self, category: str, row: int, success: bool, error: str) -> None:
+        status_item = self._group_sections[category].table.item(row, 3)
+        if success:
+            status_item.setText("Done")
+            status_item.setForeground(QBrush(QColor("#2ecc71")))
+        else:
+            error_summary = error.strip().splitlines()
+            short_error = error_summary[-1] if error_summary else "unknown error"
+            if len(short_error) > 120:
+                short_error = short_error[:117] + "..."
+            status_item.setText(f"Failed: {short_error}")
+            status_item.setToolTip(error)
+            status_item.setForeground(QBrush(QColor("#e74c3c")))
+
+    def _on_conversion_finished(self, success_count: int, total: int) -> None:
+        file_word = "file" if total == 1 else "files"
+        self.bottom_status_label.setText(f"Successfully converted {success_count}/{total} {file_word}")
+        self._converting = False
+        self._set_all_controls_enabled(True)
+        self._conversion_worker = None
