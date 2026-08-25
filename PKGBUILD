@@ -1,6 +1,6 @@
 # Maintainer: James <claude@jamessparkes.com>
 pkgname=mediaconvert
-pkgver=1.0.0
+pkgver=2.0.0
 pkgrel=1
 pkgdesc="Drag-and-drop image/video/audio format conversion"
 arch=('any')
