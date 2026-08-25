@@ -4,7 +4,7 @@ pkgver=2.0.0
 pkgrel=1
 pkgdesc="Drag-and-drop image/video/audio format conversion"
 arch=('any')
-license=('MIT')
+license=('custom')
 depends=('pyside6' 'python' 'ffmpeg' 'imagemagick' 'libwebp')
 source=()
 sha256sums=()
@@ -14,6 +14,7 @@ sha256sums=()
 # "fix" this to a source=() per-file array - makepkg flattens local file
 # sources to their basename, which breaks these paths.
 package() {
+    install -Dm644 "$startdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm755 "$startdir/mediaconvert" "$pkgdir/usr/bin/mediaconvert"
     install -Dm644 "$startdir/src/mediaconvert.desktop" "$pkgdir/usr/share/applications/mediaconvert.desktop"
     install -Dm644 "$startdir/src/mediaconvert.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/mediaconvert.png"
