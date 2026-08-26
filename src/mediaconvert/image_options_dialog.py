@@ -62,6 +62,9 @@ def _slider_row(layout: QVBoxLayout, minimum: int, maximum: int, value: int) -> 
 
 
 class ImageOptionsDialog(QDialog):
+    """Settings only take effect when Apply is clicked - Cancel discards
+    whatever was changed in the dialog."""
+
     def __init__(self, fmt: str, parent=None):
         super().__init__(parent)
         self._is_png = fmt == "png"
@@ -73,9 +76,25 @@ class ImageOptionsDialog(QDialog):
         else:
             self._build_jpeg_controls(layout)
 
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self.accept)
-        layout.addWidget(close_button)
+        buttons = QHBoxLayout()
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        apply_button = QPushButton("Apply")
+        apply_button.clicked.connect(self._apply)
+        apply_button.setDefault(True)
+        buttons.addStretch(1)
+        buttons.addWidget(cancel_button)
+        buttons.addWidget(apply_button)
+        layout.addLayout(buttons)
+
+    def _apply(self) -> None:
+        if self._is_png:
+            settings_dialog.set_png_mode("lossy" if self._lossy_radio.isChecked() else "lossless")
+            settings_dialog.set_oxipng_level(self._level_slider.value())
+            settings_dialog.set_pngquant_quality_min(self._quality_slider.value())
+        else:
+            settings_dialog.set_jpeg_quality(self._quality_slider.value())
+        self.accept()
 
     def _build_png_controls(self, layout: QVBoxLayout) -> None:
         _heading(layout, "Compression mode")
@@ -90,12 +109,14 @@ class ImageOptionsDialog(QDialog):
             lossy_radio.setChecked(True)
         else:
             lossless_radio.setChecked(True)
+        self._lossy_radio = lossy_radio
 
         _divider(layout)
 
         layout.addWidget(QLabel("Optimization level"))
         _hint(layout, "Larger, faster → smaller, slower")
         level_slider, level_label = _slider_row(layout, 0, 6, settings_dialog.get_oxipng_level())
+        self._level_slider = level_slider
 
         layout.addWidget(QLabel("Minimum quality"))
         _hint(layout, "Only used in lossy mode")
@@ -103,25 +124,17 @@ class ImageOptionsDialog(QDialog):
             layout, 0, 100, settings_dialog.get_pngquant_quality_min()
         )
         quality_slider.setEnabled(lossy_radio.isChecked())
+        self._quality_slider = quality_slider
 
-        def save_mode() -> None:
-            settings_dialog.set_png_mode("lossy" if lossy_radio.isChecked() else "lossless")
-            quality_slider.setEnabled(lossy_radio.isChecked())
-
-        lossless_radio.toggled.connect(save_mode)
-        lossy_radio.toggled.connect(save_mode)
-        level_slider.valueChanged.connect(
-            lambda v: (level_label.setText(str(v)), settings_dialog.set_oxipng_level(v))
-        )
-        quality_slider.valueChanged.connect(
-            lambda v: (quality_label.setText(str(v)), settings_dialog.set_pngquant_quality_min(v))
-        )
+        lossless_radio.toggled.connect(lambda: quality_slider.setEnabled(lossy_radio.isChecked()))
+        lossy_radio.toggled.connect(lambda: quality_slider.setEnabled(lossy_radio.isChecked()))
+        level_slider.valueChanged.connect(lambda v: level_label.setText(str(v)))
+        quality_slider.valueChanged.connect(lambda v: quality_label.setText(str(v)))
 
     def _build_jpeg_controls(self, layout: QVBoxLayout) -> None:
         layout.addWidget(QLabel("Quality"))
         quality_slider, quality_label = _slider_row(
             layout, 1, 100, settings_dialog.get_jpeg_quality()
         )
-        quality_slider.valueChanged.connect(
-            lambda v: (quality_label.setText(str(v)), settings_dialog.set_jpeg_quality(v))
-        )
+        quality_slider.valueChanged.connect(lambda v: quality_label.setText(str(v)))
+        self._quality_slider = quality_slider
