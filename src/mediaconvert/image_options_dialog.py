@@ -119,7 +119,7 @@ class ImageOptionsDialog(QDialog):
         self._level_slider = level_slider
 
         layout.addWidget(QLabel("Minimum quality"))
-        _hint(layout, "Only used in lossy mode")
+        _hint(layout, "Lower is smaller but riskier, with more visible color loss")
         quality_slider, quality_label = _slider_row(
             layout, 0, 100, settings_dialog.get_pngquant_quality_min()
         )
