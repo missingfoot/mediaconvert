@@ -123,6 +123,7 @@ class ImageOptionsDialog(QDialog):
         quality_slider, quality_label = _slider_row(
             layout, 0, 100, settings_dialog.get_pngquant_quality_min()
         )
+        _hint(layout, "65 is a good default for most photos")
         quality_slider.setEnabled(lossy_radio.isChecked())
         self._quality_slider = quality_slider
 
