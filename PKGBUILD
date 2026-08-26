@@ -21,6 +21,7 @@ package() {
     install -Dm644 "$startdir/src/mediaconvert/__init__.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/__init__.py"
     install -Dm644 "$startdir/src/mediaconvert/__main__.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/__main__.py"
     install -Dm644 "$startdir/src/mediaconvert/categorize.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/categorize.py"
+    install -Dm644 "$startdir/src/mediaconvert/control.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/control.py"
     install -Dm644 "$startdir/src/mediaconvert/converter.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/converter.py"
     install -Dm644 "$startdir/src/mediaconvert/icons.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/icons.py"
     install -Dm644 "$startdir/src/mediaconvert/image_convert.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/image_convert.py"

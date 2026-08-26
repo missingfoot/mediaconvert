@@ -4,7 +4,7 @@ from pathlib import Path
 
 IMAGE_FORMATS = {
     "avif", "bmp", "gif", "heic", "ico", "jfif", "jpeg", "jpg", "png",
-    "tiff", "webp",
+    "tif", "tiff", "webp",
 }
 
 VIDEO_FORMATS = {

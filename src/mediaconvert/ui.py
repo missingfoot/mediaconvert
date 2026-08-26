@@ -56,6 +56,7 @@ _ICON_NAME_BY_EXTENSION: dict[str, str] = {
     "jpeg": "image-jpeg",
     "jpg": "image-jpeg",
     "png": "image-png",
+    "tif": "image-tiff",
     "tiff": "image-tiff",
     "webp": "image-webp",
     # video
