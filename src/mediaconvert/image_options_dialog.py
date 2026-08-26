@@ -54,8 +54,11 @@ class ImageOptionsDialog(QDialog):
         else:
             lossless_radio.setChecked(True)
 
-        layout.addWidget(QLabel("Optimization level (0 = fast, 6 = smallest)"))
+        layout.addWidget(QLabel("Optimization level"))
         level_slider, level_label = _slider_row(layout, 0, 6, settings_dialog.get_oxipng_level())
+        level_hint = QLabel("Larger, faster → smaller, slower")
+        level_hint.setStyleSheet("color: palette(placeholder-text);")
+        layout.addWidget(level_hint)
 
         layout.addWidget(QLabel("Minimum quality (lossy mode only)"))
         quality_slider, quality_label = _slider_row(
