@@ -187,7 +187,7 @@ def test_convert_png_to_png_lossless_runs_oxipng_only(tmp_path):
     src = tmp_path / "a.png"
     out = tmp_path / "a-1.png"
     _make_png(src)
-    options = ImageOptions(png_mode="lossless", oxipng_level=3)
+    options = ImageOptions(png_optimize=True, png_mode="lossless", oxipng_level=3)
     with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
         convert_image(src, out, "png", options)
     assert out.exists()  # copied from src before oxipng (mocked) runs on it
@@ -202,7 +202,7 @@ def test_convert_png_to_png_lossy_runs_pngquant_then_oxipng(tmp_path):
     src = tmp_path / "a.png"
     out = tmp_path / "a-1.png"
     _make_png(src)
-    options = ImageOptions(png_mode="lossy", pngquant_quality_min=70, oxipng_level=2)
+    options = ImageOptions(png_optimize=True, png_mode="lossy", pngquant_quality_min=70, oxipng_level=2)
     with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
         convert_image(src, out, "png", options)
     assert mock_run.call_count == 2
@@ -225,7 +225,7 @@ def test_convert_bmp_to_png_still_optimizes(tmp_path):
     _make_png(png_src)
     subprocess.run(["magick", str(png_src), str(src)], check=True, capture_output=True)
     with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
-        convert_image(src, out, "png", ImageOptions(png_mode="lossless", oxipng_level=1))
+        convert_image(src, out, "png", ImageOptions(png_optimize=True, png_mode="lossless", oxipng_level=1))
     assert mock_run.call_count == 2
     (magick_cmd,), _ = mock_run.call_args_list[0]
     (oxipng_cmd,), _ = mock_run.call_args_list[1]
@@ -242,7 +242,7 @@ def test_convert_jpg_to_jpg_optimizes_with_jpegoptim(tmp_path):
     subprocess.run(
         ["magick", str(src.with_suffix(".png")), str(src)], check=True, capture_output=True,
     )
-    options = ImageOptions(jpeg_quality=72)
+    options = ImageOptions(jpeg_optimize=True, jpeg_quality=72)
     with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
         convert_image(src, out, "jpg", options)
     assert out.exists()  # copied from src before jpegoptim (mocked) runs on it
@@ -260,9 +260,34 @@ def test_convert_jpeg_source_to_jpg_target_is_treated_as_same_format(tmp_path):
         ["magick", str(src.with_suffix(".png")), str(src)], check=True, capture_output=True,
     )
     with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
-        convert_image(src, out, "jpg", ImageOptions())
+        convert_image(src, out, "jpg", ImageOptions(jpeg_optimize=True))
     (cmd,), _ = mock_run.call_args
     assert cmd[0] == "jpegoptim"
+
+
+def test_convert_png_to_png_uses_plain_magick_by_default(tmp_path):
+    src = tmp_path / "a.png"
+    out = tmp_path / "a-1.png"
+    _make_png(src)
+    with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
+        convert_image(src, out, "png", ImageOptions())
+    assert mock_run.call_count == 1
+    (cmd,), _ = mock_run.call_args
+    assert cmd == ["magick", str(src), str(out)]
+
+
+def test_convert_jpg_to_jpg_uses_plain_magick_by_default(tmp_path):
+    src = tmp_path / "a.jpg"
+    out = tmp_path / "a-1.jpg"
+    _make_png(src.with_suffix(".png"))
+    subprocess.run(
+        ["magick", str(src.with_suffix(".png")), str(src)], check=True, capture_output=True,
+    )
+    with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
+        convert_image(src, out, "jpg", ImageOptions())
+    assert mock_run.call_count == 1
+    (cmd,), _ = mock_run.call_args
+    assert cmd == ["magick", str(src), str(out)]
 
 
 def test_convert_bmp_to_jpg_still_optimizes(tmp_path):
@@ -272,7 +297,7 @@ def test_convert_bmp_to_jpg_still_optimizes(tmp_path):
     _make_png(png_src)
     subprocess.run(["magick", str(png_src), str(src)], check=True, capture_output=True)
     with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
-        convert_image(src, out, "jpg", ImageOptions(jpeg_quality=90))
+        convert_image(src, out, "jpg", ImageOptions(jpeg_optimize=True, jpeg_quality=90))
     assert mock_run.call_count == 2
     (magick_cmd,), _ = mock_run.call_args_list[0]
     (jpegoptim_cmd,), _ = mock_run.call_args_list[1]

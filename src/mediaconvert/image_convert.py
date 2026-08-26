@@ -11,12 +11,15 @@ _JPEG_EXTENSIONS = {".jpg", ".jpeg", ".jfif"}
 
 @dataclass
 class ImageOptions:
-    """PNG/JPEG optimization settings, applied to every conversion whose
-    output format is png or jpg/jpeg - see convert_image."""
+    """PNG/JPEG optimization settings. Optimization only runs for a png or
+    jpg/jpeg output when its own *_optimize flag is on - otherwise
+    convert_image falls back to a plain magick re-encode. See convert_image."""
 
+    png_optimize: bool = False
     png_mode: str = "lossless"  # "lossless" or "lossy"
     oxipng_level: int = 4
     pngquant_quality_min: int = 65
+    jpeg_optimize: bool = False
     jpeg_quality: int = 85
 
 # Formats cwebp can read directly. Everything else needs a temp-PNG bridge
@@ -132,8 +135,9 @@ def _optimize_jpeg(src: Path, magick_src: str, out_path: Path, options: ImageOpt
 def convert_image(src: Path, out_path: Path, fmt: str, options: ImageOptions | None = None) -> None:
     """Convert an image file to fmt, writing to out_path.
 
-    Converting to png or jpg/jpeg always runs the result through the
-    matching optimizer (oxipng/pngquant or jpegoptim) - see ImageOptions.
+    Converting to png or jpg/jpeg runs the result through the matching
+    optimizer (oxipng/pngquant or jpegoptim) only when its optimize flag
+    is on - see ImageOptions. Otherwise falls back to a plain re-encode.
 
     Raises RuntimeError on failure.
     """
@@ -141,9 +145,9 @@ def convert_image(src: Path, out_path: Path, fmt: str, options: ImageOptions | N
     magick_src = _magick_src(src)
     if fmt == "webp":
         _convert_to_webp(src, magick_src, out_path)
-    elif fmt == "png":
+    elif fmt == "png" and options.png_optimize:
         _optimize_png(src, magick_src, out_path, options)
-    elif fmt in ("jpg", "jpeg"):
+    elif fmt in ("jpg", "jpeg") and options.jpeg_optimize:
         _optimize_jpeg(src, magick_src, out_path, options)
     else:
         _run(["magick", magick_src, str(out_path)])

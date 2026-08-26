@@ -66,6 +66,14 @@ def resolve_output_dir(src_dir: Path) -> Path | None:
     return None
 
 
+def get_png_optimize() -> bool:
+    return _settings().value("png_optimize", False, type=bool)
+
+
+def set_png_optimize(enabled: bool) -> None:
+    _settings().setValue("png_optimize", enabled)
+
+
 def get_png_mode() -> str:
     return _settings().value("png_mode", "lossless")
 
@@ -90,6 +98,14 @@ def set_pngquant_quality_min(value: int) -> None:
     _settings().setValue("pngquant_quality_min", value)
 
 
+def get_jpeg_optimize() -> bool:
+    return _settings().value("jpeg_optimize", False, type=bool)
+
+
+def set_jpeg_optimize(enabled: bool) -> None:
+    _settings().setValue("jpeg_optimize", enabled)
+
+
 def get_jpeg_quality() -> int:
     return int(_settings().value("jpeg_quality", 85))
 
@@ -100,9 +116,11 @@ def set_jpeg_quality(value: int) -> None:
 
 def get_image_options() -> ImageOptions:
     return ImageOptions(
+        png_optimize=get_png_optimize(),
         png_mode=get_png_mode(),
         oxipng_level=get_oxipng_level(),
         pngquant_quality_min=get_pngquant_quality_min(),
+        jpeg_optimize=get_jpeg_optimize(),
         jpeg_quality=get_jpeg_quality(),
     )
 

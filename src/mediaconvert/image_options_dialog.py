@@ -2,6 +2,7 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QStyle,
     QVBoxLayout,
+    QWidget,
 )
 
 from mediaconvert import settings_dialog
@@ -89,53 +91,90 @@ class ImageOptionsDialog(QDialog):
 
     def _apply(self) -> None:
         if self._is_png:
+            settings_dialog.set_png_optimize(self._optimize_checkbox.isChecked())
             settings_dialog.set_png_mode("lossy" if self._lossy_radio.isChecked() else "lossless")
             settings_dialog.set_oxipng_level(self._level_slider.value())
             settings_dialog.set_pngquant_quality_min(self._quality_slider.value())
         else:
+            settings_dialog.set_jpeg_optimize(self._optimize_checkbox.isChecked())
             settings_dialog.set_jpeg_quality(self._quality_slider.value())
         self.accept()
 
     def _build_png_controls(self, layout: QVBoxLayout) -> None:
-        _heading(layout, "Compression mode")
+        optimize_checkbox = QCheckBox("Optimize")
+        optimize_checkbox.setChecked(settings_dialog.get_png_optimize())
+        layout.addWidget(optimize_checkbox)
+        _hint(layout, "Off uses a plain ImageMagick conversion instead")
+        self._optimize_checkbox = optimize_checkbox
+
+        _divider(layout)
+
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(controls)
+
+        _heading(controls_layout, "Compression mode")
         lossless_radio = QRadioButton("Lossless")
-        layout.addWidget(lossless_radio)
+        controls_layout.addWidget(lossless_radio)
         indent = _radio_text_indent(lossless_radio)
-        _hint(layout, "No quality loss", indent)
+        _hint(controls_layout, "No quality loss", indent)
         lossy_radio = QRadioButton("Lossy")
-        layout.addWidget(lossy_radio)
-        _hint(layout, "Reduces color palette, smaller files", indent)
+        controls_layout.addWidget(lossy_radio)
+        _hint(controls_layout, "Reduces color palette, smaller files", indent)
         if settings_dialog.get_png_mode() == "lossy":
             lossy_radio.setChecked(True)
         else:
             lossless_radio.setChecked(True)
         self._lossy_radio = lossy_radio
 
-        _divider(layout)
+        _divider(controls_layout)
 
-        layout.addWidget(QLabel("Optimization level"))
-        _hint(layout, "Larger, faster → smaller, slower")
-        level_slider, level_label = _slider_row(layout, 0, 6, settings_dialog.get_oxipng_level())
+        controls_layout.addWidget(QLabel("Optimization level"))
+        _hint(controls_layout, "Larger, faster → smaller, slower")
+        level_slider, level_label = _slider_row(controls_layout, 0, 6, settings_dialog.get_oxipng_level())
         self._level_slider = level_slider
 
-        layout.addWidget(QLabel("Minimum quality"))
-        _hint(layout, "Lower is smaller but riskier, with more visible color loss")
+        controls_layout.addWidget(QLabel("Minimum quality"))
+        _hint(controls_layout, "Lower is smaller but riskier, with more visible color loss")
         quality_slider, quality_label = _slider_row(
-            layout, 0, 100, settings_dialog.get_pngquant_quality_min()
+            controls_layout, 0, 100, settings_dialog.get_pngquant_quality_min()
         )
-        _hint(layout, "65 is a good default for most photos")
-        quality_slider.setEnabled(lossy_radio.isChecked())
+        _hint(controls_layout, "65 is a good default for most photos")
         self._quality_slider = quality_slider
 
-        lossless_radio.toggled.connect(lambda: quality_slider.setEnabled(lossy_radio.isChecked()))
-        lossy_radio.toggled.connect(lambda: quality_slider.setEnabled(lossy_radio.isChecked()))
+        def sync_enabled() -> None:
+            controls.setEnabled(optimize_checkbox.isChecked())
+            quality_slider.setEnabled(optimize_checkbox.isChecked() and lossy_radio.isChecked())
+
+        optimize_checkbox.toggled.connect(sync_enabled)
+        lossless_radio.toggled.connect(sync_enabled)
+        lossy_radio.toggled.connect(sync_enabled)
+        sync_enabled()
+
         level_slider.valueChanged.connect(lambda v: level_label.setText(str(v)))
         quality_slider.valueChanged.connect(lambda v: quality_label.setText(str(v)))
 
     def _build_jpeg_controls(self, layout: QVBoxLayout) -> None:
-        layout.addWidget(QLabel("Quality"))
+        optimize_checkbox = QCheckBox("Optimize")
+        optimize_checkbox.setChecked(settings_dialog.get_jpeg_optimize())
+        layout.addWidget(optimize_checkbox)
+        _hint(layout, "Off uses a plain ImageMagick conversion instead")
+        self._optimize_checkbox = optimize_checkbox
+
+        _divider(layout)
+
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(controls)
+
+        controls_layout.addWidget(QLabel("Quality"))
         quality_slider, quality_label = _slider_row(
-            layout, 1, 100, settings_dialog.get_jpeg_quality()
+            controls_layout, 1, 100, settings_dialog.get_jpeg_quality()
         )
         quality_slider.valueChanged.connect(lambda v: quality_label.setText(str(v)))
         self._quality_slider = quality_slider
+
+        controls.setEnabled(optimize_checkbox.isChecked())
+        optimize_checkbox.toggled.connect(controls.setEnabled)
