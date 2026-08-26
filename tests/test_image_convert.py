@@ -190,12 +190,12 @@ def test_convert_png_to_png_lossless_runs_oxipng_only(tmp_path):
     options = ImageOptions(png_mode="lossless", oxipng_level=3)
     with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
         convert_image(src, out, "png", options)
+    assert out.exists()  # copied from src before oxipng (mocked) runs on it
     assert mock_run.call_count == 1
     (cmd,), _ = mock_run.call_args
     assert cmd[0] == "oxipng"
     assert "-o" in cmd and cmd[cmd.index("-o") + 1] == "3"
-    assert "--out" in cmd and cmd[cmd.index("--out") + 1] == str(out)
-    assert cmd[-1] == str(src)
+    assert cmd[-1] == str(out)
 
 
 def test_convert_png_to_png_lossy_runs_pngquant_then_oxipng(tmp_path):
@@ -210,12 +210,29 @@ def test_convert_png_to_png_lossy_runs_pngquant_then_oxipng(tmp_path):
     (oxipng_cmd,), _ = mock_run.call_args_list[1]
     assert pngquant_cmd[0] == "pngquant"
     assert "--quality=70-100" in pngquant_cmd
-    assert pngquant_cmd[-1] == str(src)
+    assert pngquant_cmd[-1] == str(out)
     assert oxipng_cmd[0] == "oxipng"
     assert "-o" in oxipng_cmd and oxipng_cmd[oxipng_cmd.index("-o") + 1] == "2"
     assert "--out" in oxipng_cmd and oxipng_cmd[oxipng_cmd.index("--out") + 1] == str(out)
     # oxipng must read pngquant's temp output, not the original source.
     assert oxipng_cmd[-1] == pngquant_cmd[pngquant_cmd.index("--output") + 1]
+
+
+def test_convert_bmp_to_png_still_optimizes(tmp_path):
+    png_src = tmp_path / "a.png"
+    src = tmp_path / "a.bmp"
+    out = tmp_path / "a-1.png"
+    _make_png(png_src)
+    subprocess.run(["magick", str(png_src), str(src)], check=True, capture_output=True)
+    with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
+        convert_image(src, out, "png", ImageOptions(png_mode="lossless", oxipng_level=1))
+    assert mock_run.call_count == 2
+    (magick_cmd,), _ = mock_run.call_args_list[0]
+    (oxipng_cmd,), _ = mock_run.call_args_list[1]
+    assert magick_cmd[0] == "magick"
+    assert magick_cmd[-1] == str(out)
+    assert oxipng_cmd[0] == "oxipng"
+    assert oxipng_cmd[-1] == str(out)
 
 
 def test_convert_jpg_to_jpg_optimizes_with_jpegoptim(tmp_path):
@@ -248,13 +265,19 @@ def test_convert_jpeg_source_to_jpg_target_is_treated_as_same_format(tmp_path):
     assert cmd[0] == "jpegoptim"
 
 
-def test_convert_bmp_to_png_does_not_optimize(tmp_path):
+def test_convert_bmp_to_jpg_still_optimizes(tmp_path):
     png_src = tmp_path / "a.png"
     src = tmp_path / "a.bmp"
-    out = tmp_path / "a.png.converted.png"
+    out = tmp_path / "a-1.jpg"
     _make_png(png_src)
     subprocess.run(["magick", str(png_src), str(src)], check=True, capture_output=True)
     with patch("mediaconvert.image_convert.subprocess.run", return_value=_ok_result()) as mock_run:
-        convert_image(src, out, "png", ImageOptions())
-    (cmd,), _ = mock_run.call_args
-    assert cmd[0] == "magick"
+        convert_image(src, out, "jpg", ImageOptions(jpeg_quality=90))
+    assert mock_run.call_count == 2
+    (magick_cmd,), _ = mock_run.call_args_list[0]
+    (jpegoptim_cmd,), _ = mock_run.call_args_list[1]
+    assert magick_cmd[0] == "magick"
+    assert magick_cmd[-1] == str(out)
+    assert jpegoptim_cmd[0] == "jpegoptim"
+    assert "--max=90" in jpegoptim_cmd
+    assert jpegoptim_cmd[-1] == str(out)

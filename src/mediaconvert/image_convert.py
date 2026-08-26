@@ -11,8 +11,8 @@ _JPEG_EXTENSIONS = {".jpg", ".jpeg", ".jfif"}
 
 @dataclass
 class ImageOptions:
-    """PNG/JPEG optimization settings, applied only on same-format
-    conversions (png->png, jpg/jpeg->jpg/jpeg) - see convert_image."""
+    """PNG/JPEG optimization settings, applied to every conversion whose
+    output format is png or jpg/jpeg - see convert_image."""
 
     png_mode: str = "lossless"  # "lossless" or "lossy"
     oxipng_level: int = 4
@@ -99,42 +99,51 @@ def _convert_to_webp(src: Path, magick_src: str, out_path: Path) -> None:
             _run(["cwebp", "-q", "90", tmp.name, "-o", str(out_path)])
 
 
-def _optimize_png(src: Path, out_path: Path, options: ImageOptions) -> None:
+def _optimize_png(src: Path, magick_src: str, out_path: Path, options: ImageOptions) -> None:
+    # Get a PNG at out_path first - either the source itself, or a plain
+    # magick re-encode when converting from another format - then optimize
+    # it in place.
+    if src.suffix.lower() == ".png":
+        shutil.copy2(src, out_path)
+    else:
+        _run(["magick", magick_src, str(out_path)])
+
     if options.png_mode == "lossy":
         with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
             _run([
                 "pngquant", f"--quality={options.pngquant_quality_min}-100",
-                "--output", tmp.name, "--force", str(src),
+                "--output", tmp.name, "--force", str(out_path),
             ])
             _run(["oxipng", "-o", str(options.oxipng_level), "--out", str(out_path), tmp.name])
     else:
-        _run(["oxipng", "-o", str(options.oxipng_level), "--out", str(out_path), str(src)])
+        _run(["oxipng", "-o", str(options.oxipng_level), str(out_path)])
 
 
-def _optimize_jpeg(src: Path, out_path: Path, options: ImageOptions) -> None:
-    # jpegoptim optimizes in place, so operate on a copy - the source must
-    # never be touched.
-    shutil.copy2(src, out_path)
+def _optimize_jpeg(src: Path, magick_src: str, out_path: Path, options: ImageOptions) -> None:
+    # jpegoptim optimizes in place, so get a JPEG at out_path first - either
+    # a copy of the source, or a plain magick re-encode - then optimize it.
+    if src.suffix.lower() in _JPEG_EXTENSIONS:
+        shutil.copy2(src, out_path)
+    else:
+        _run(["magick", magick_src, str(out_path)])
     _run(["jpegoptim", f"--max={options.jpeg_quality}", "--strip-all", str(out_path)])
 
 
 def convert_image(src: Path, out_path: Path, fmt: str, options: ImageOptions | None = None) -> None:
     """Convert an image file to fmt, writing to out_path.
 
-    When src is already the same format as fmt (png->png, or
-    jpg/jpeg/jfif->jpg/jpeg), this optimizes the image instead of doing a
-    plain re-encode - see ImageOptions.
+    Converting to png or jpg/jpeg always runs the result through the
+    matching optimizer (oxipng/pngquant or jpegoptim) - see ImageOptions.
 
     Raises RuntimeError on failure.
     """
     options = options or ImageOptions()
-    src_ext = src.suffix.lower()
     magick_src = _magick_src(src)
     if fmt == "webp":
         _convert_to_webp(src, magick_src, out_path)
-    elif fmt == "png" and src_ext == ".png":
-        _optimize_png(src, out_path, options)
-    elif fmt in ("jpg", "jpeg") and src_ext in _JPEG_EXTENSIONS:
-        _optimize_jpeg(src, out_path, options)
+    elif fmt == "png":
+        _optimize_png(src, magick_src, out_path, options)
+    elif fmt in ("jpg", "jpeg"):
+        _optimize_jpeg(src, magick_src, out_path, options)
     else:
         _run(["magick", magick_src, str(out_path)])
