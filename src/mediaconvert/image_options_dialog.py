@@ -14,6 +14,13 @@ from PySide6.QtWidgets import (
 from mediaconvert import settings_dialog
 
 
+def _hint(layout: QVBoxLayout, text: str) -> QLabel:
+    label = QLabel(text)
+    label.setStyleSheet("color: palette(placeholder-text);")
+    layout.addWidget(label)
+    return label
+
+
 def _slider_row(layout: QVBoxLayout, minimum: int, maximum: int, value: int) -> tuple[QSlider, QLabel]:
     slider = QSlider(Qt.Horizontal)
     slider.setRange(minimum, maximum)
@@ -45,10 +52,12 @@ class ImageOptionsDialog(QDialog):
 
     def _build_png_controls(self, layout: QVBoxLayout) -> None:
         layout.addWidget(QLabel("Compression mode"))
-        lossless_radio = QRadioButton("Lossless (no quality loss)")
-        lossy_radio = QRadioButton("Lossy (reduces color palette, smaller files)")
+        lossless_radio = QRadioButton("Lossless")
         layout.addWidget(lossless_radio)
+        _hint(layout, "No quality loss")
+        lossy_radio = QRadioButton("Lossy")
         layout.addWidget(lossy_radio)
+        _hint(layout, "Reduces color palette, smaller files")
         if settings_dialog.get_png_mode() == "lossy":
             lossy_radio.setChecked(True)
         else:
@@ -56,11 +65,10 @@ class ImageOptionsDialog(QDialog):
 
         layout.addWidget(QLabel("Optimization level"))
         level_slider, level_label = _slider_row(layout, 0, 6, settings_dialog.get_oxipng_level())
-        level_hint = QLabel("Larger, faster → smaller, slower")
-        level_hint.setStyleSheet("color: palette(placeholder-text);")
-        layout.addWidget(level_hint)
+        _hint(layout, "Larger, faster → smaller, slower")
 
-        layout.addWidget(QLabel("Minimum quality (lossy mode only)"))
+        layout.addWidget(QLabel("Minimum quality"))
+        _hint(layout, "Only used in lossy mode")
         quality_slider, quality_label = _slider_row(
             layout, 0, 100, settings_dialog.get_pngquant_quality_min()
         )
