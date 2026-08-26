@@ -3,6 +3,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -22,6 +23,20 @@ def _hint(layout: QVBoxLayout, text: str, indent: int = 0) -> QLabel:
         label.setContentsMargins(indent, 0, 0, 0)
     layout.addWidget(label)
     return label
+
+
+def _heading(layout: QVBoxLayout, text: str) -> QLabel:
+    label = QLabel(text)
+    label.setStyleSheet("font-weight: 600;")
+    layout.addWidget(label)
+    return label
+
+
+def _divider(layout: QVBoxLayout) -> None:
+    line = QFrame()
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    layout.addWidget(line)
 
 
 def _radio_text_indent(radio: QRadioButton) -> int:
@@ -63,7 +78,7 @@ class ImageOptionsDialog(QDialog):
         layout.addWidget(close_button)
 
     def _build_png_controls(self, layout: QVBoxLayout) -> None:
-        layout.addWidget(QLabel("Compression mode"))
+        _heading(layout, "Compression mode")
         lossless_radio = QRadioButton("Lossless")
         layout.addWidget(lossless_radio)
         indent = _radio_text_indent(lossless_radio)
@@ -76,9 +91,11 @@ class ImageOptionsDialog(QDialog):
         else:
             lossless_radio.setChecked(True)
 
+        _divider(layout)
+
         layout.addWidget(QLabel("Optimization level"))
-        level_slider, level_label = _slider_row(layout, 0, 6, settings_dialog.get_oxipng_level())
         _hint(layout, "Larger, faster → smaller, slower")
+        level_slider, level_label = _slider_row(layout, 0, 6, settings_dialog.get_oxipng_level())
 
         layout.addWidget(QLabel("Minimum quality"))
         _hint(layout, "Only used in lossy mode")
