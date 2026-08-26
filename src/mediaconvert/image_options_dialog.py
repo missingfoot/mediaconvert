@@ -8,17 +8,29 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSlider,
+    QStyle,
     QVBoxLayout,
 )
 
 from mediaconvert import settings_dialog
 
 
-def _hint(layout: QVBoxLayout, text: str) -> QLabel:
+def _hint(layout: QVBoxLayout, text: str, indent: int = 0) -> QLabel:
     label = QLabel(text)
     label.setStyleSheet("color: palette(placeholder-text);")
+    if indent:
+        label.setContentsMargins(indent, 0, 0, 0)
     layout.addWidget(label)
     return label
+
+
+def _radio_text_indent(radio: QRadioButton) -> int:
+    """Left offset needed to line up with a QRadioButton's text, past its indicator."""
+    style = radio.style()
+    return (
+        style.pixelMetric(QStyle.PM_ExclusiveIndicatorWidth, None, radio)
+        + style.pixelMetric(QStyle.PM_RadioButtonLabelSpacing, None, radio)
+    )
 
 
 def _slider_row(layout: QVBoxLayout, minimum: int, maximum: int, value: int) -> tuple[QSlider, QLabel]:
@@ -54,10 +66,11 @@ class ImageOptionsDialog(QDialog):
         layout.addWidget(QLabel("Compression mode"))
         lossless_radio = QRadioButton("Lossless")
         layout.addWidget(lossless_radio)
-        _hint(layout, "No quality loss")
+        indent = _radio_text_indent(lossless_radio)
+        _hint(layout, "No quality loss", indent)
         lossy_radio = QRadioButton("Lossy")
         layout.addWidget(lossy_radio)
-        _hint(layout, "Reduces color palette, smaller files")
+        _hint(layout, "Reduces color palette, smaller files", indent)
         if settings_dialog.get_png_mode() == "lossy":
             lossy_radio.setChecked(True)
         else:
