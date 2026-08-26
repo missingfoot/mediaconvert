@@ -39,7 +39,10 @@ from mediaconvert.categorize import CATEGORY_ORDER, split_by_category, target_fo
 from mediaconvert.control import ConversionControl
 from mediaconvert.converter import convert_file
 from mediaconvert.icons import svg_pixmap
-from mediaconvert.settings_dialog import SettingsDialog, resolve_output_dir
+from mediaconvert.image_options_dialog import ImageOptionsDialog
+from mediaconvert.settings_dialog import SettingsDialog, get_image_options, resolve_output_dir
+
+_OPTIMIZABLE_FORMATS = {"png", "jpg", "jpeg"}
 
 _ARROW_DOWN_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>"""
 _CIRCLE_ALERT_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>"""
@@ -149,7 +152,11 @@ class _ConversionWorker(QThread):
                 )
                 try:
                     out_dir = resolve_output_dir(job.path.parent)
-                    result = convert_file(job.path, job.fmt, job.category, out_dir, control=self._control)
+                    image_options = get_image_options() if job.category == "image" else None
+                    result = convert_file(
+                        job.path, job.fmt, job.category, out_dir,
+                        control=self._control, image_options=image_options,
+                    )
                     success, error = result.success, result.error or ""
                 except Exception as e:
                     # convert_file already never raises, but this safety net
@@ -310,6 +317,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(combo)
         options_button = QPushButton("Options")
         options_button.setEnabled(False)
+        options_button.clicked.connect(lambda _checked=False, cat=category: self._open_image_options(cat))
         header_layout.addWidget(options_button)
         clear_button = QPushButton("Clear")
         clear_button.setVisible(False)
@@ -798,14 +806,21 @@ class MainWindow(QMainWindow):
         self.stop_button.setVisible(processing)
 
     def _set_all_controls_enabled(self, enabled: bool) -> None:
-        for section in self._group_sections.values():
+        for category, section in self._group_sections.items():
             section.table.setSortingEnabled(enabled)
             section.combo.setEnabled(enabled)
+            is_optimizable = category == "image" and section.combo.currentText() in _OPTIMIZABLE_FORMATS
+            section.options_button.setEnabled(enabled and is_optimizable)
             section.clear_button.setEnabled(enabled)
             section.convert_button.setEnabled(enabled)
         self.convert_button.setEnabled(enabled)
         self.add_button.setEnabled(enabled)
         self.clear_button.setEnabled(enabled)
+
+    def _open_image_options(self, category: str) -> None:
+        section = self._group_sections[category]
+        dialog = ImageOptionsDialog(section.combo.currentText(), self)
+        dialog.exec()
 
     def _on_format_changed(self, category: str) -> None:
         if self._converting:
@@ -813,6 +828,9 @@ class MainWindow(QMainWindow):
         section = self._group_sections.get(category)
         if section is None:
             return
+        section.options_button.setEnabled(
+            category == "image" and section.combo.currentText() in _OPTIMIZABLE_FORMATS
+        )
         table = section.table
         for row in range(table.rowCount()):
             status_item = table.item(row, 3)

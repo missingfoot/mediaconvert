@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mediaconvert.control import ConversionControl
-from mediaconvert.image_convert import convert_image
+from mediaconvert.image_convert import ImageOptions, convert_image
 from mediaconvert.media_convert import convert_media
 from mediaconvert.naming import copy_mtime, resolve_output_path
 
@@ -24,6 +24,7 @@ def convert_file(
     category: str,
     out_dir: Path | None = None,
     control: ConversionControl | None = None,
+    image_options: ImageOptions | None = None,
 ) -> ConversionResult:
     """Convert src to fmt, writing into out_dir (or next to src if out_dir is
     None). Never raises - failures are reported in the result.
@@ -33,7 +34,7 @@ def convert_file(
     out_path = resolve_output_path(src, fmt, out_dir)
     try:
         if category == "image":
-            convert_image(src, out_path, fmt)
+            convert_image(src, out_path, fmt, image_options)
         else:
             convert_media(src, out_path, fmt, control=control)
         copy_mtime(src, out_path)

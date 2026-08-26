@@ -5,7 +5,7 @@ pkgrel=2
 pkgdesc="Drag-and-drop image/video/audio format conversion"
 arch=('any')
 license=('custom')
-depends=('pyside6' 'python' 'ffmpeg' 'imagemagick' 'libwebp')
+depends=('pyside6' 'python' 'ffmpeg' 'imagemagick' 'libwebp' 'pngquant' 'oxipng' 'jpegoptim')
 source=()
 sha256sums=()
 
@@ -25,6 +25,7 @@ package() {
     install -Dm644 "$startdir/src/mediaconvert/converter.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/converter.py"
     install -Dm644 "$startdir/src/mediaconvert/icons.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/icons.py"
     install -Dm644 "$startdir/src/mediaconvert/image_convert.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/image_convert.py"
+    install -Dm644 "$startdir/src/mediaconvert/image_options_dialog.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/image_options_dialog.py"
     install -Dm644 "$startdir/src/mediaconvert/media_convert.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/media_convert.py"
     install -Dm644 "$startdir/src/mediaconvert/naming.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/naming.py"
     install -Dm644 "$startdir/src/mediaconvert/settings_dialog.py" "$pkgdir/usr/share/mediaconvert/mediaconvert/settings_dialog.py"

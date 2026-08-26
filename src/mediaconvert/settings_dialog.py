@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from mediaconvert import __version__
+from mediaconvert.image_convert import ImageOptions
 
 SAME_AS_SOURCE = "same"
 CONVERTED_SUBFOLDER = "converted_subfolder"
@@ -63,6 +64,47 @@ def resolve_output_dir(src_dir: Path) -> Path | None:
         custom = get_custom_output_dir()
         return Path(custom) if custom else None
     return None
+
+
+def get_png_mode() -> str:
+    return _settings().value("png_mode", "lossless")
+
+
+def set_png_mode(mode: str) -> None:
+    _settings().setValue("png_mode", mode)
+
+
+def get_oxipng_level() -> int:
+    return int(_settings().value("oxipng_level", 4))
+
+
+def set_oxipng_level(level: int) -> None:
+    _settings().setValue("oxipng_level", level)
+
+
+def get_pngquant_quality_min() -> int:
+    return int(_settings().value("pngquant_quality_min", 65))
+
+
+def set_pngquant_quality_min(value: int) -> None:
+    _settings().setValue("pngquant_quality_min", value)
+
+
+def get_jpeg_quality() -> int:
+    return int(_settings().value("jpeg_quality", 85))
+
+
+def set_jpeg_quality(value: int) -> None:
+    _settings().setValue("jpeg_quality", value)
+
+
+def get_image_options() -> ImageOptions:
+    return ImageOptions(
+        png_mode=get_png_mode(),
+        oxipng_level=get_oxipng_level(),
+        pngquant_quality_min=get_pngquant_quality_min(),
+        jpeg_quality=get_jpeg_quality(),
+    )
 
 
 _PAGE_TITLES = ["File Settings", "About"]
