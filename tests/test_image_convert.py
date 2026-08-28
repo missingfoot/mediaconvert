@@ -78,6 +78,28 @@ def test_convert_animated_gif_to_webp_uses_gif2webp(tmp_path):
     assert len(frames.stdout.strip().splitlines()) > 1
 
 
+def test_convert_animated_gif_to_png_writes_one_first_frame_file(tmp_path):
+    src = tmp_path / "a.gif"
+    out = tmp_path / "a.png"
+    _make_animated_gif(src)  # frame 1 red, frame 2 blue
+    convert_image(src, out, "png")
+    assert out.exists()
+    # One output file - not the a-0.png / a-1.png-per-frame mess magick
+    # produces when handed an animated source for a single-frame format.
+    assert not list(tmp_path.glob("a-*.png"))
+    identify = subprocess.run(
+        ["magick", "identify", "-format", "%m\n", str(out)],
+        check=True, capture_output=True, text=True,
+    )
+    assert identify.stdout.strip().splitlines() == ["PNG"]
+    # First frame is the red one.
+    color = subprocess.run(
+        ["magick", str(out), "-format", "%[pixel:p{0,0}]", "info:"],
+        check=True, capture_output=True, text=True,
+    )
+    assert "255,0,0" in color.stdout or "red" in color.stdout
+
+
 def test_convert_ico_picks_largest_frame(tmp_path):
     src = tmp_path / "a.ico"
     out = tmp_path / "a.png"

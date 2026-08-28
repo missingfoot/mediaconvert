@@ -8,6 +8,14 @@ from pathlib import Path
 
 _JPEG_EXTENSIONS = {".jpg", ".jpeg", ".jfif"}
 
+# Source extensions that can hold more than one frame/page, and the output
+# formats that can hold them all. Converting a multi-frame source into
+# anything outside _MULTIFRAME_OUT reads only the first frame - otherwise
+# `magick in.gif out.png` writes out-0.png, out-1.png, ... and the
+# conversion then fails looking for out.png. See _magick_src.
+_MULTIFRAME_IN = {".gif", ".webp", ".tif", ".tiff", ".mng", ".apng"}
+_MULTIFRAME_OUT = {"gif", "webp", "tif", "tiff"}
+
 
 @dataclass
 class ImageOptions:
@@ -58,10 +66,18 @@ def _largest_ico_frame_index(src: Path) -> int:
     return best_idx
 
 
-def _magick_src(src: Path) -> str:
-    """The path/frame-selector magick should read from (handles multi-frame .ico)."""
-    if src.suffix.lower() == ".ico":
+def _magick_src(src: Path, fmt: str) -> str:
+    """The path/frame-selector magick should read from.
+
+    Multi-frame .ico -> its largest frame. A multi-frame source (animated
+    GIF, multi-page TIFF, ...) converted to a single-frame output format ->
+    just the first frame, so magick writes one file instead of one per
+    frame."""
+    ext = src.suffix.lower()
+    if ext == ".ico":
         return f"{src}[{_largest_ico_frame_index(src)}]"
+    if ext in _MULTIFRAME_IN and fmt not in _MULTIFRAME_OUT:
+        return f"{src}[0]"
     return str(src)
 
 
@@ -142,7 +158,7 @@ def convert_image(src: Path, out_path: Path, fmt: str, options: ImageOptions | N
     Raises RuntimeError on failure.
     """
     options = options or ImageOptions()
-    magick_src = _magick_src(src)
+    magick_src = _magick_src(src, fmt)
     if fmt == "webp":
         _convert_to_webp(src, magick_src, out_path)
     elif fmt == "png" and options.png_optimize:
