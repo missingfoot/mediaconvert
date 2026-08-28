@@ -104,7 +104,7 @@ class ImageOptionsDialog(QDialog):
         optimize_checkbox = QCheckBox("Optimize")
         optimize_checkbox.setChecked(settings_dialog.get_png_optimize())
         layout.addWidget(optimize_checkbox)
-        _hint(layout, "Off uses a plain ImageMagick conversion instead")
+        _hint(layout, "On runs the output through oxipng (plus pngquant in lossy mode); off uses a plain ImageMagick conversion")
         self._optimize_checkbox = optimize_checkbox
 
         _divider(layout)
@@ -159,7 +159,7 @@ class ImageOptionsDialog(QDialog):
         optimize_checkbox = QCheckBox("Optimize")
         optimize_checkbox.setChecked(settings_dialog.get_jpeg_optimize())
         layout.addWidget(optimize_checkbox)
-        _hint(layout, "Off uses a plain ImageMagick conversion instead")
+        _hint(layout, "On runs the output through jpegoptim; off uses a plain ImageMagick conversion")
         self._optimize_checkbox = optimize_checkbox
 
         _divider(layout)
