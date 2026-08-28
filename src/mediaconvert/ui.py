@@ -121,7 +121,7 @@ class _ConversionWorker(QThread):
     touches widgets directly (Qt widgets are not thread-safe)."""
 
     job_starting = Signal(str, int, int, int, int)  # category, row, index_in_category, total_in_category, remaining_overall
-    job_finished = Signal(str, int, bool, str)  # category, row, success, error
+    job_finished = Signal(str, int, bool, str, int)  # category, row, success, error, out_size_bytes (-1 if unavailable)
     job_reverted = Signal(str, int)  # category, row - stopped mid-flight, back to Ready
     finished_all = Signal(int, int, bool)  # success_count, attempted, stopped
 
@@ -150,6 +150,7 @@ class _ConversionWorker(QThread):
                     job.category, job.row, category_progress[job.category],
                     self._category_totals[job.category], remaining,
                 )
+                out_size = -1
                 try:
                     out_dir = resolve_output_dir(job.path.parent)
                     image_options = get_image_options() if job.category == "image" else None
@@ -158,6 +159,11 @@ class _ConversionWorker(QThread):
                         control=self._control, image_options=image_options,
                     )
                     success, error = result.success, result.error or ""
+                    if success and result.out_path is not None:
+                        try:
+                            out_size = result.out_path.stat().st_size
+                        except OSError:
+                            out_size = -1
                 except Exception as e:
                     # convert_file already never raises, but this safety net
                     # guards against any other unexpected error in this
@@ -173,7 +179,7 @@ class _ConversionWorker(QThread):
                     attempted += 1
                     if success:
                         success_count += 1
-                    self.job_finished.emit(job.category, job.row, success, error)
+                    self.job_finished.emit(job.category, job.row, success, error, out_size)
 
                 if self._control.stop_requested.is_set():
                     break
@@ -332,10 +338,10 @@ class MainWindow(QMainWindow):
         header_icon_label.setPixmap(self._icon_for_category(category).pixmap(icon_size, icon_size))
         outer.addWidget(header)
 
-        table = QTableWidget(0, 4)
+        table = QTableWidget(0, 5)
         table.installEventFilter(self)
         self._table_category[table] = category
-        table.setHorizontalHeaderLabels(["File Name", "Size", "Type", "Status"])
+        table.setHorizontalHeaderLabels(["File Name", "Size", "Type", "Status", "Output size"])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -358,9 +364,11 @@ class MainWindow(QMainWindow):
         header_view.setSectionResizeMode(1, QHeaderView.Interactive)
         header_view.setSectionResizeMode(2, QHeaderView.Interactive)
         header_view.setSectionResizeMode(3, QHeaderView.Interactive)
+        header_view.setSectionResizeMode(4, QHeaderView.Interactive)
         table.setColumnWidth(1, 120)
         table.setColumnWidth(2, 120)
         table.setColumnWidth(3, 140)
+        table.setColumnWidth(4, 130)
         outer.addWidget(table, stretch=1)
 
         return GroupSection(
@@ -578,17 +586,20 @@ class MainWindow(QMainWindow):
         return self._icon_for_category(category)
 
     @staticmethod
-    def _human_size(path: Path) -> str:
-        try:
-            size = path.stat().st_size
-        except OSError:
-            return ""
-        value = float(size)
+    def _format_size(nbytes: int) -> str:
+        value = float(nbytes)
         for unit in ("B", "KB", "MB", "GB"):
             if value < 1024 or unit == "GB":
                 return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
             value /= 1024
         return f"{value:.1f} GB"
+
+    @staticmethod
+    def _human_size(path: Path) -> str:
+        try:
+            return MainWindow._format_size(path.stat().st_size)
+        except OSError:
+            return ""
 
     @staticmethod
     def _type_for_path(path: Path) -> str:
@@ -687,9 +698,15 @@ class MainWindow(QMainWindow):
             name_item.setIcon(self._icon_for_path(p, category))
             name_item.setData(Qt.UserRole, str(p))
             section.table.setItem(row, 0, name_item)
-            section.table.setItem(row, 1, QTableWidgetItem(self._human_size(p)))
+            size_item = QTableWidgetItem(self._human_size(p))
+            try:
+                size_item.setData(Qt.UserRole, p.stat().st_size)
+            except OSError:
+                size_item.setData(Qt.UserRole, None)
+            section.table.setItem(row, 1, size_item)
             section.table.setItem(row, 2, QTableWidgetItem(self._type_for_path(p)))
             section.table.setItem(row, 3, QTableWidgetItem("Ready"))
+            section.table.setItem(row, 4, QTableWidgetItem(""))
         section.table.setSortingEnabled(True)
         self._update_group_header(category)
 
@@ -839,13 +856,16 @@ class MainWindow(QMainWindow):
             status_item.setText("Ready")
             status_item.setForeground(QBrush())
             status_item.setToolTip("")
+            self._clear_output_size_cell(table, row)
 
     def _on_job_starting(
         self, category: str, row: int, index_in_category: int, total_in_category: int, remaining: int
     ) -> None:
-        status_item = self._group_sections[category].table.item(row, 3)
+        table = self._group_sections[category].table
+        status_item = table.item(row, 3)
         status_item.setForeground(QBrush())
         status_item.setText("Converting…")
+        self._clear_output_size_cell(table, row)
 
         category_word = "file" if total_in_category == 1 else "files"
         remaining_word = "file" if remaining == 1 else "files"
@@ -854,11 +874,15 @@ class MainWindow(QMainWindow):
             f"{remaining} {remaining_word} remaining"
         )
 
-    def _on_job_finished(self, category: str, row: int, success: bool, error: str) -> None:
-        status_item = self._group_sections[category].table.item(row, 3)
+    def _on_job_finished(
+        self, category: str, row: int, success: bool, error: str, out_size: int = -1
+    ) -> None:
+        table = self._group_sections[category].table
+        status_item = table.item(row, 3)
         if success:
             status_item.setText("Done")
             status_item.setForeground(QBrush(QColor("#2ecc71")))
+            self._set_output_size_cell(table, row, out_size)
         else:
             error_summary = error.strip().splitlines()
             short_error = error_summary[-1] if error_summary else "unknown error"
@@ -871,10 +895,43 @@ class MainWindow(QMainWindow):
             self._log_error(category, name, error)
 
     def _on_job_reverted(self, category: str, row: int) -> None:
-        status_item = self._group_sections[category].table.item(row, 3)
+        table = self._group_sections[category].table
+        status_item = table.item(row, 3)
         status_item.setText("Ready")
         status_item.setForeground(QBrush())
         status_item.setToolTip("")
+        self._clear_output_size_cell(table, row)
+
+    @staticmethod
+    def _clear_output_size_cell(table: QTableWidget, row: int) -> None:
+        out_item = table.item(row, 4)
+        if out_item is None:
+            return
+        out_item.setText("")
+        out_item.setForeground(QBrush())
+
+    def _set_output_size_cell(self, table: QTableWidget, row: int, out_size: int) -> None:
+        out_item = table.item(row, 4)
+        if out_item is None:
+            return
+        if out_size < 0:
+            out_item.setText("")
+            out_item.setForeground(QBrush())
+            return
+
+        text = self._format_size(out_size)
+        brush = QBrush()
+        size_item = table.item(row, 1)
+        orig = size_item.data(Qt.UserRole) if size_item is not None else None
+        if isinstance(orig, int) and orig > 0:
+            pct = round((out_size - orig) / orig * 100)
+            text = f"{text}  ({pct:+d}%)"
+            if out_size < orig:
+                brush = QBrush(QColor("#2ecc71"))
+            elif out_size > orig:
+                brush = QBrush(QColor("#e74c3c"))
+        out_item.setText(text)
+        out_item.setForeground(brush)
 
     def _log_error(self, category: str, name: str, error: str) -> None:
         timestamp = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
